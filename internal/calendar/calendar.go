@@ -30,6 +30,10 @@ type CalendarInfo struct {
 	ID      string `json:"id"`      // provider calendar id ("primary", an address, a URL)
 	Name    string `json:"name"`    // display name
 	Primary bool   `json:"primary"` // the account's default calendar
+	// Writable reports whether events can be created here. A calendar shared with the user
+	// read-only is perfectly valid for conflict checking but cannot be a write target, and
+	// finding that out at booking time means a failed booking rather than a disabled radio.
+	Writable bool `json:"writable"`
 }
 
 // CalendarSelection is a CalendarInfo plus the user's per-calendar settings.
@@ -62,9 +66,17 @@ type Provider interface {
 
 	// Operations
 	FreeBusy(ctx context.Context, userID string, from, to time.Time) ([]slots.Interval, error)
-	CreateEvent(ctx context.Context, userID string, p CreateEventParams) (eventID, joinURL string, err error)
-	UpdateEvent(ctx context.Context, userID, eventID string, start, end time.Time) error
-	CancelEvent(ctx context.Context, userID, eventID string) error
+
+	// CreateEvent writes to the user's destination calendar and also returns WHICH calendar
+	// that was, so the caller can store it against the booking. Update and Cancel then act
+	// on that stored calendar rather than re-resolving the current destination, which would
+	// break every existing booking the moment a host changes their destination.
+	CreateEvent(ctx context.Context, userID string, p CreateEventParams) (eventID, joinURL, calendarID string, err error)
+
+	// calendarID is the one CreateEvent reported. Empty means "resolve the destination the
+	// old way" - correct for bookings made before that was recorded.
+	UpdateEvent(ctx context.Context, userID, calendarID, eventID string, start, end time.Time) error
+	CancelEvent(ctx context.Context, userID, calendarID, eventID string) error
 }
 
 // Service holds the configured providers and dispatches per-user operations to
@@ -161,10 +173,27 @@ func (s *Service) CanAutoGenerate(ctx context.Context, userID, locType string) (
 	}
 }
 
-// Disconnect removes all calendar connections for the user (any provider).
+// Disconnect removes all calendar connections for the user (any provider), including their
+// per-account calendar selections.
+//
+// connection_calendars has no foreign key to calendar_connections on purpose - the
+// connection row is deleted and re-inserted under a new id on every token refresh, so an FK
+// would cascade a user's selections away hourly (see migration 00049). The cost of that
+// decision is that disconnect flows must clear the rows themselves, which is exactly what
+// was missing: the migration's own comment claimed they did, and nothing did.
 func (s *Service) Disconnect(ctx context.Context, userID string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM calendar_connections WHERE user_id = ?`, userID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx, `DELETE FROM calendar_connections WHERE user_id = ?`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM connection_calendars WHERE user_id = ?`, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Connection is one connected calendar account for the multi-calendar UI/API.
@@ -200,9 +229,15 @@ func (s *Service) Connections(ctx context.Context, userID string) ([]Connection,
 	return out, rows.Err()
 }
 
-// SetDestination makes connID the user's single write destination (clears the flag on the
-// rest). Errors if connID isn't one of the user's connections.
-func (s *Service) SetDestination(ctx context.Context, userID, connID string) error {
+// SetDestination makes one connected ACCOUNT the user's single write destination (clearing
+// the flag on the rest).
+//
+// Keyed on (provider, accountEmail) rather than the connection row id: that id is recreated
+// on every OAuth token refresh, and listing an account's calendars can itself trigger one.
+// A page that had loaded before the refresh then held a dead id, and choosing a destination
+// failed with "calendar connection not found" for no reason the user could see. The
+// calendars endpoints were already hardened this way; this one was not.
+func (s *Service) SetDestination(ctx context.Context, userID, provider, accountEmail string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -210,7 +245,9 @@ func (s *Service) SetDestination(ctx context.Context, userID, connID string) err
 	defer tx.Rollback() //nolint:errcheck
 	var owned int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM calendar_connections WHERE id = ? AND user_id = ?`, connID, userID).Scan(&owned); err != nil {
+		`SELECT COUNT(*) FROM calendar_connections
+		 WHERE user_id = ? AND provider = ? AND COALESCE(account_email,'') = ?`,
+		userID, provider, accountEmail).Scan(&owned); err != nil {
 		return err
 	}
 	if owned == 0 {
@@ -221,35 +258,67 @@ func (s *Service) SetDestination(ctx context.Context, userID, connID string) err
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE calendar_connections SET is_destination = 1 WHERE id = ? AND user_id = ?`, connID, userID); err != nil {
+		`UPDATE calendar_connections SET is_destination = 1
+		 WHERE user_id = ? AND provider = ? AND COALESCE(account_email,'') = ?`,
+		userID, provider, accountEmail); err != nil {
+		return err
+	}
+	// Choosing the account clears any sub-calendar pick inside a DIFFERENT account, which
+	// would otherwise still claim to be the write target in the picker while the write path
+	// resolved this account instead.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE connection_calendars SET is_destination = 0
+		 WHERE user_id = ? AND NOT (provider = ? AND account_email = ?)`,
+		userID, provider, accountEmail); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// DisconnectOne removes one of the user's connections. If it was the destination, the
-// oldest remaining connection is promoted so the user keeps a write target.
-func (s *Service) DisconnectOne(ctx context.Context, userID, connID string) error {
+// DisconnectOne removes ONE connected account and its calendar selections. If it was the
+// write destination, the oldest remaining connection is promoted so the user keeps a target.
+//
+// Keyed on (provider, accountEmail), not the connection row id, for the same reason as
+// SetDestination: the id is recreated on every token refresh. The previous version was
+// worse than a wrong lookup - a stale id hit "no rows" and returned nil, so the API replied
+// 204 Success having deleted nothing, and the account simply stayed on the page with no
+// error to explain it. A missing account is now reported, not swallowed.
+func (s *Service) DisconnectOne(ctx context.Context, userID, provider, accountEmail string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
+
 	var wasDest int
 	switch err := tx.QueryRowContext(ctx,
-		`SELECT is_destination FROM calendar_connections WHERE id = ? AND user_id = ?`, connID, userID).Scan(&wasDest); err {
+		`SELECT is_destination FROM calendar_connections
+		 WHERE user_id = ? AND provider = ? AND COALESCE(account_email,'') = ?`,
+		userID, provider, accountEmail).Scan(&wasDest); err {
 	case nil:
 	case sql.ErrNoRows:
-		return nil // already gone / not theirs — no-op
+		return sql.ErrNoRows
 	default:
 		return err
 	}
+
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM calendar_connections WHERE id = ? AND user_id = ?`, connID, userID); err != nil {
+		`DELETE FROM calendar_connections
+		 WHERE user_id = ? AND provider = ? AND COALESCE(account_email,'') = ?`,
+		userID, provider, accountEmail); err != nil {
 		return err
 	}
+	// Without this the account's calendar picks survive the disconnect, and reconnecting the
+	// same address silently inherits them - including a destination pointing at a calendar
+	// the user may no longer have.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM connection_calendars
+		 WHERE user_id = ? AND provider = ? AND account_email = ?`,
+		userID, provider, accountEmail); err != nil {
+		return err
+	}
+
 	if wasDest != 0 {
-		// Promote the oldest remaining connection to destination (if any).
 		var nextID string
 		if err := tx.QueryRowContext(ctx,
 			`SELECT id FROM calendar_connections WHERE user_id = ? ORDER BY created_at ASC LIMIT 1`, userID).Scan(&nextID); err == nil {
@@ -305,27 +374,30 @@ func (s *Service) FreeBusy(ctx context.Context, userID string, from, to time.Tim
 	return out, nil
 }
 
-// CreateEvent creates an event on the user's DESTINATION calendar; returns ("","",nil) if
-// they have no destination.
-func (s *Service) CreateEvent(ctx context.Context, userID string, p CreateEventParams) (string, string, error) {
+// CreateEvent creates an event on the user's DESTINATION calendar. Returns the event id,
+// the join URL, and the calendar it was written to; ("","","",nil) if they have no
+// destination. Persist the calendar id alongside the event id.
+func (s *Service) CreateEvent(ctx context.Context, userID string, p CreateEventParams) (string, string, string, error) {
 	if pr := s.providerForDestination(ctx, userID); pr != nil {
 		return pr.CreateEvent(ctx, userID, p)
 	}
-	return "", "", nil
+	return "", "", "", nil
 }
 
-// UpdateEvent moves an event on the user's DESTINATION calendar.
-func (s *Service) UpdateEvent(ctx context.Context, userID, eventID string, start, end time.Time) error {
+// UpdateEvent moves an event. calendarID is the one recorded at creation; empty falls back
+// to the user's current destination.
+func (s *Service) UpdateEvent(ctx context.Context, userID, calendarID, eventID string, start, end time.Time) error {
 	if pr := s.providerForDestination(ctx, userID); pr != nil {
-		return pr.UpdateEvent(ctx, userID, eventID, start, end)
+		return pr.UpdateEvent(ctx, userID, calendarID, eventID, start, end)
 	}
 	return nil
 }
 
-// CancelEvent deletes an event on the user's DESTINATION calendar.
-func (s *Service) CancelEvent(ctx context.Context, userID, eventID string) error {
+// CancelEvent deletes an event. calendarID is the one recorded at creation; empty falls
+// back to the user's current destination.
+func (s *Service) CancelEvent(ctx context.Context, userID, calendarID, eventID string) error {
 	if pr := s.providerForDestination(ctx, userID); pr != nil {
-		return pr.CancelEvent(ctx, userID, eventID)
+		return pr.CancelEvent(ctx, userID, calendarID, eventID)
 	}
 	return nil
 }

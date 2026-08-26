@@ -79,7 +79,10 @@
 	let busy = $state(false);
 	let justConnected = $state(false);
 	let disconnectOpen = $state(false);
-	let pendingDisconnectId = $state<string | null>(null);
+	// The connection object, not its id: the id is recreated on every OAuth token refresh
+	// (which opening the calendar picker can trigger), so a stale one strands the request.
+	// Both endpoints key on provider + account_email instead.
+	let pendingDisconnect = $state<CalendarConnection | null>(null);
 
 	const providers = $derived(status?.providers ?? []);
 	const connections = $derived(status?.connections ?? []);
@@ -156,6 +159,12 @@
 		}
 	}
 
+	// Exclusive within this account's list. The backend clears the flag across every other
+	// account when it saves, so the UI only has to keep this list consistent.
+	function pickDestination(chosen: CalendarPick) {
+		pickerCals = pickerCals.map((c) => ({ ...c, is_destination: c.id === chosen.id }));
+	}
+
 	async function savePicker(c: CalendarConnection) {
 		pickerSaving = true;
 		pickerErr = '';
@@ -174,11 +183,14 @@
 		}
 	}
 
-	async function setDestination(id: string) {
+	async function setDestination(c: CalendarConnection) {
 		busy = true;
 		error = '';
 		try {
-			await api.post(`/v1/calendar/connections/${id}/destination`, {});
+			await api.post(`/v1/calendar/connections/${c.id}/destination`, {
+				provider: c.provider,
+				account_email: c.account_email ?? ''
+			});
 			await load();
 		} catch (e: any) {
 			error = e.message;
@@ -187,22 +199,24 @@
 		}
 	}
 
-	function askDisconnect(id: string) {
-		pendingDisconnectId = id;
+	function askDisconnect(c: CalendarConnection) {
+		pendingDisconnect = c;
 		disconnectOpen = true;
 	}
 
 	async function doDisconnect() {
-		if (!pendingDisconnectId) return;
+		if (!pendingDisconnect) return;
+		const c = pendingDisconnect;
 		busy = true;
 		try {
-			await api.del(`/v1/calendar/connections/${pendingDisconnectId}`);
+			const q = new URLSearchParams({ provider: c.provider, account: c.account_email ?? '' });
+			await api.del(`/v1/calendar/connections/${c.id}?${q}`);
 			await load();
 		} catch (e: any) {
 			error = e.message;
 		} finally {
 			busy = false;
-			pendingDisconnectId = null;
+			pendingDisconnect = null;
 		}
 	}
 
@@ -241,7 +255,7 @@
 
 <div class="mb-8">
 	<h1 class="text-2xl font-semibold tracking-tight">Calendar</h1>
-	<p class="mt-1 text-sm text-muted-foreground">Connect one or more calendars — all are checked for conflicts, and bookings are written to the one you choose.</p>
+	<p class="mt-1 text-sm text-muted-foreground">Connect one or more accounts. Choose which calendars are checked for conflicts, and which single calendar bookings are written into.</p>
 </div>
 
 {#if error}
@@ -283,10 +297,10 @@
 						</div>
 						<div class="flex shrink-0 items-center gap-4">
 							<label class="flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground">
-								<input type="radio" name="destination" checked={c.is_destination} disabled={busy} onchange={() => setDestination(c.id)} />
+								<input type="radio" name="destination" checked={c.is_destination} disabled={busy} onchange={() => setDestination(c)} />
 								Add bookings here
 							</label>
-							<Button variant="ghost" size="sm" onclick={() => askDisconnect(c.id)} disabled={busy}>Disconnect</Button>
+							<Button variant="ghost" size="sm" onclick={() => askDisconnect(c)} disabled={busy}>Disconnect</Button>
 						</div>
 						</div>
 						<div class="mt-2 pl-8">
@@ -303,13 +317,36 @@
 								{:else if pickerCals.length === 0}
 									<p class="text-xs text-muted-foreground">No calendars found for this account.</p>
 								{:else}
-									<p class="text-xs text-muted-foreground">Choose which calendars in this account are checked for conflicts.</p>
+									<p class="text-xs text-muted-foreground">
+										Tick the calendars to check for conflicts, and choose the one bookings are
+										written into.
+									</p>
 									<div class="space-y-1.5">
+										<div class="flex items-center gap-2 pb-1 text-xs font-medium text-muted-foreground">
+											<span class="w-10 shrink-0 text-center">Check</span>
+											<span class="w-10 shrink-0 text-center">Book</span>
+											<span>Calendar</span>
+										</div>
 										{#each pickerCals as cal (cal.id)}
-											<label class="flex cursor-pointer items-center gap-2 text-sm">
-												<input type="checkbox" bind:checked={cal.check_conflicts} disabled={pickerSaving} />
-												<span class="truncate">{cal.name}{#if cal.primary}<span class="ml-1 text-xs text-muted-foreground">(primary)</span>{/if}</span>
-											</label>
+											<div class="flex items-center gap-2 text-sm">
+												<span class="w-10 shrink-0 text-center">
+													<input type="checkbox" bind:checked={cal.check_conflicts} disabled={pickerSaving}
+														aria-label="Check {cal.name} for conflicts" />
+												</span>
+												<span class="w-10 shrink-0 text-center">
+													<!-- One destination per account in the UI; the API enforces one per user
+													     across all accounts and moves the account-level destination to match. -->
+													<input type="radio" name="subcal-destination" disabled={pickerSaving || !cal.writable}
+														checked={cal.is_destination}
+														onchange={() => pickDestination(cal)}
+														aria-label="Write bookings into {cal.name}" />
+												</span>
+												<span class="truncate">
+													{cal.name}
+													{#if cal.primary}<span class="ml-1 text-xs text-muted-foreground">(primary)</span>{/if}
+													{#if !cal.writable}<span class="ml-1 text-xs text-muted-foreground">(read-only)</span>{/if}
+												</span>
+											</div>
 										{/each}
 									</div>
 									<div class="flex items-center gap-2 pt-1">
