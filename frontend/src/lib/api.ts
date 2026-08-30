@@ -1,337 +1,348 @@
 export type User = {
-	id: string;
-	email: string;
-	name: string;
-	timezone: string;
-	time_format: '12h' | '24h';
-	week_start: number; // 0=Sunday, 1=Monday
-	date_format: 'dmy' | 'mdy' | 'ymd';
-	avatar_url?: string;
-	is_admin: boolean;
-	is_owner: boolean;
-	role: 'owner' | 'admin' | 'member';
-	notify_confirmation: boolean;
-	notify_cancellation: boolean;
-	notify_reschedule: boolean;
-	notify_reminder: boolean;
-	notify_host_booking: boolean;
-	notify_host_cancel: boolean;
-	notify_host_reschedule: boolean;
+  id: string;
+  email: string;
+  name: string;
+  timezone: string;
+  time_format: "12h" | "24h";
+  week_start: number; // 0=Sunday, 1=Monday
+  date_format: "dmy" | "mdy" | "ymd";
+  avatar_url?: string;
+  is_admin: boolean;
+  is_owner: boolean;
+  role: "owner" | "admin" | "member";
+  notify_confirmation: boolean;
+  notify_cancellation: boolean;
+  notify_reschedule: boolean;
+  notify_reminder: boolean;
+  notify_host_booking: boolean;
+  notify_host_cancel: boolean;
+  notify_host_reschedule: boolean;
 };
 
 export type EventType = {
-	id: string;
-	slug: string;
-	name: string;
-	description?: string;
-	duration_minutes: number;
-	is_active: boolean;
-	is_public: boolean;
-	location_type: string;
-	location_value?: string;
-	buffer_before_minutes: number;
-	buffer_after_minutes: number;
-	min_notice_minutes: number;
-	max_future_days: number;
-	max_active_bookings: number;
-	price_cents: number; // 0 = free
-	currency: string;    // ISO 4217, lowercase (e.g. "usd")
-	created_at: string;
-	subj_confirmation?: string;
-	subj_cancellation?: string;
-	subj_reschedule?: string;
-	subj_reminder?: string;
-	msg_confirmation?: string;
-	msg_cancellation?: string;
-	msg_reschedule?: string;
-	msg_reminder?: string;
-	/** Overrides the conversational assistant's opening chat line; unset = built-in translated default. */
-	msg_greeting?: string;
-	reminders: number[]; // hours_before values
-	routing_mode: 'fixed' | 'round_robin' | 'collective';
-	rr_strategy: 'even' | 'soonest' | 'priority';
-	/** True when archived — hidden from the default list, is_active forced off. Reversible. */
-	archived?: boolean;
-	/** True if the current user owns this event type; false if they only host it (read-only). */
-	owned?: boolean;
-	/** Owner identity, returned only when the viewer is a read-only host. */
-	owner_name?: string;
-	owner_email?: string;
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  duration_minutes: number;
+  is_active: boolean;
+  is_public: boolean;
+  location_type: string;
+  location_value?: string;
+  buffer_before_minutes: number;
+  buffer_after_minutes: number;
+  min_notice_minutes: number;
+  max_future_days: number;
+  max_active_bookings: number;
+  price_cents: number; // 0 = free
+  currency: string; // ISO 4217, lowercase (e.g. "usd")
+  created_at: string;
+  subj_confirmation?: string;
+  subj_cancellation?: string;
+  subj_reschedule?: string;
+  subj_reminder?: string;
+  msg_confirmation?: string;
+  msg_cancellation?: string;
+  msg_reschedule?: string;
+  msg_reminder?: string;
+  /** Overrides the conversational assistant's opening chat line; unset = built-in translated default. */
+  msg_greeting?: string;
+  reminders: number[]; // hours_before values
+  routing_mode: "fixed" | "round_robin" | "collective";
+  rr_strategy: "even" | "soonest" | "priority";
+  /** True when archived — hidden from the default list, is_active forced off. Reversible. */
+  archived?: boolean;
+  /** True if the current user owns this event type; false if they only host it (read-only). */
+  owned?: boolean;
+  /** Owner identity, returned only when the viewer is a read-only host. */
+  owner_name?: string;
+  owner_email?: string;
 };
 
 export type EventTypeHost = {
-	user_id: string;
-	name: string;
-	email: string;
-	avatar_url?: string;
-	role: 'required' | 'rotation' | 'optional';
-	priority: number;
-	archived: boolean;
+  user_id: string;
+  name: string;
+  email: string;
+  avatar_url?: string;
+  role: "required" | "rotation" | "optional";
+  priority: number;
+  archived: boolean;
 };
 
 export type Question = {
-	id: string;
-	event_type_id: string;
-	label: string;
-	type: 'text' | 'select' | 'checkbox';
-	options?: string[];
-	required: boolean;
-	position: number;
+  id: string;
+  event_type_id: string;
+  label: string;
+  type: "text" | "select" | "checkbox";
+  options?: string[];
+  required: boolean;
+  position: number;
 };
 
 export type Booking = {
-	id: string;
-	event_type_slug: string;
-	start_at: string;
-	end_at: string;
-	status: 'confirmed' | 'cancelled';
-	attendees: { name: string; email: string }[];
-	created_at: string;
-	host_name?: string; // populated only in the admin "All bookings" view
-	location_value?: string;
-	/** Payment fields — present only for paid bookings (omitted when free). */
-	payment_status?: 'pending' | 'paid' | 'refunded';
-	amount_paid_cents?: number;
-	amount_paid_currency?: string;
+  id: string;
+  event_type_slug: string;
+  start_at: string;
+  end_at: string;
+  status: "confirmed" | "cancelled";
+  attendees: { name: string; email: string }[];
+  created_at: string;
+  host_name?: string; // populated only in the admin "All bookings" view
+  location_value?: string;
+  /** Payment fields — present only for paid bookings (omitted when free). */
+  payment_status?: "pending" | "paid" | "refunded";
+  amount_paid_cents?: number;
+  amount_paid_currency?: string;
 };
 
 export type APIKey = {
-	id: string;
-	name: string;
-	created_at: string;
-	last_used_at?: string;
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at?: string;
 };
 
 export type OAuthConnection = {
-	id: string;
-	client_name: string;
-	created_at: string;
-	last_used_at?: string;
-	expires_at: string;
+  id: string;
+  client_name: string;
+  created_at: string;
+  last_used_at?: string;
+  expires_at: string;
 };
 
 export type Webhook = {
-	id: string;
-	url: string;
-	events: string[];
-	fields?: string[];
-	is_active: boolean;
-	created_at: string;
+  id: string;
+  url: string;
+  events: string[];
+  fields?: string[];
+  is_active: boolean;
+  created_at: string;
 };
 
 export type WebhookDelivery = {
-	id: string;
-	webhook_id: string;
-	event: string;
-	status: string;
-	booking_id?: string;
-	response_status?: number;
-	attempt_count: number;
-	last_attempted_at?: string;
+  id: string;
+  webhook_id: string;
+  event: string;
+  status: string;
+  booking_id?: string;
+  response_status?: number;
+  attempt_count: number;
+  last_attempted_at?: string;
 };
 
 export type CalendarConnection = {
-	id: string;
-	provider: string;
-	account_email: string;
-	is_destination: boolean;
-	check_conflicts: boolean;
+  id: string;
+  provider: string;
+  account_email: string;
+  is_destination: boolean;
+  check_conflicts: boolean;
 };
 
 export type CalendarPick = {
-	id: string;
-	name: string;
-	primary: boolean;
-	writable: boolean; // false for a read-only shared calendar: valid for conflicts, not as a write target
-	check_conflicts: boolean;
-	is_destination: boolean;
+  id: string;
+  name: string;
+  primary: boolean;
+  writable: boolean; // false for a read-only shared calendar: valid for conflicts, not as a write target
+  check_conflicts: boolean;
+  is_destination: boolean;
 };
 
 export type CalendarStatus = {
-	connected: boolean;
-	configured?: boolean;
-	calendar_id?: string;
-	provider?: string;    // destination provider name, when connected
-	providers?: string[]; // configured providers available to connect
-	connections?: CalendarConnection[]; // all connected calendars (many checked, one destination)
-	unconfigured_providers?: string[]; // providers Calnode supports but this instance has no credentials for
+  connected: boolean;
+  configured?: boolean;
+  calendar_id?: string;
+  provider?: string; // destination provider name, when connected
+  providers?: string[]; // configured providers available to connect
+  connections?: CalendarConnection[]; // all connected calendars (many checked, one destination)
+  unconfigured_providers?: string[]; // providers Calnode supports but this instance has no credentials for
 };
 
 export type EmailSettings = {
-	smtp_host: string;
-	smtp_port: string;
-	smtp_user: string;
-	smtp_pass_set: boolean; // true when a password is stored; never returned directly
-	smtp_tls: boolean;
-	smtp_starttls: boolean;
-	email_from: string;
-	email_from_name: string;
-	resend_api_key_set: boolean; // true when a key is stored; never returned directly
-	// Which path mail actually goes out over. "SMTP fields are filled in" and "mail is
-	// being delivered over SMTP" can differ, so the server reports the live answer.
-	transport: 'none' | 'smtp' | 'resend_api';
-	enabled: boolean;
+  smtp_host: string;
+  smtp_port: string;
+  smtp_user: string;
+  smtp_pass_set: boolean; // true when a password is stored; never returned directly
+  smtp_tls: boolean;
+  smtp_starttls: boolean;
+  email_from: string;
+  email_from_name: string;
+  resend_api_key_set: boolean; // true when a key is stored; never returned directly
+  // Which path mail actually goes out over. "SMTP fields are filled in" and "mail is
+  // being delivered over SMTP" can differ, so the server reports the live answer.
+  transport: "none" | "smtp" | "resend_api";
+  enabled: boolean;
 };
 
 export type GoogleSettings = {
-	client_id: string;
-	client_secret_set: boolean;
-	configured: boolean;
-	/** Identity host the server builds OAuth redirect URIs from. */
-	base_url: string;
+  client_id: string;
+  client_secret_set: boolean;
+  configured: boolean;
+  /** Identity host the server builds OAuth redirect URIs from. */
+  base_url: string;
 };
 
 export type ZoomSettings = {
-	client_id: string;
-	client_secret_set: boolean;
-	configured: boolean;
-	/** Exact redirect URI to register in the Zoom Marketplace app. */
-	redirect_uri: string;
+  client_id: string;
+  client_secret_set: boolean;
+  configured: boolean;
+  /** Exact redirect URI to register in the Zoom Marketplace app. */
+  redirect_uri: string;
 };
 
 export type ZoomStatus = {
-	configured: boolean; // a Zoom app is set up for the instance
-	connected: boolean;  // the current host has connected their Zoom account
+  configured: boolean; // a Zoom app is set up for the instance
+  connected: boolean; // the current host has connected their Zoom account
 };
 
 export type StripeSettings = {
-	publishable_key: string;
-	secret_key_set: boolean;
-	webhook_secret_set: boolean;
-	configured: boolean; // can take a payment AND verify the confirming webhook
-	/** The endpoint to register in the Stripe dashboard. */
-	webhook_url: string;
+  publishable_key: string;
+  secret_key_set: boolean;
+  webhook_secret_set: boolean;
+  configured: boolean; // can take a payment AND verify the confirming webhook
+  /** The endpoint to register in the Stripe dashboard. */
+  webhook_url: string;
 };
 
 export type LLMSettings = {
-	enabled: boolean;
-	endpoint: string;
-	model: string;
-	api_key_set: boolean;
-	configured: boolean;
-	/** true when a live client is active (enabled + configured). */
-	active: boolean;
-	/** admin "additional instructions" appended to the base prompt. */
-	extra_instructions: string;
-	/** read-only, code-owned base system prompt (not editable). */
-	base_prompt: string;
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  api_key_set: boolean;
+  configured: boolean;
+  /** true when a live client is active (enabled + configured). */
+  active: boolean;
+  /** admin "additional instructions" appended to the base prompt. */
+  extra_instructions: string;
+  /** read-only, code-owned base system prompt (not editable). */
+  base_prompt: string;
 };
 
 export type TeamMember = {
-	id: string;
-	email: string;
-	name: string;
-	timezone: string;
-	is_admin: boolean;
-	is_owner: boolean;
-	role: 'owner' | 'admin' | 'member';
-	email_login: boolean;
-	provider?: string;
-	avatar_url?: string;
-	created_at: string;
-	archived: boolean;
-	archived_at?: string;
-	archived_by?: string;
-	archived_by_name?: string;
-	teams: { id: string; name: string }[];
+  id: string;
+  email: string;
+  name: string;
+  timezone: string;
+  is_admin: boolean;
+  is_owner: boolean;
+  role: "owner" | "admin" | "member";
+  email_login: boolean;
+  provider?: string;
+  avatar_url?: string;
+  created_at: string;
+  archived: boolean;
+  archived_at?: string;
+  archived_by?: string;
+  archived_by_name?: string;
+  teams: { id: string; name: string }[];
 };
 
 export type Team = {
-	id: string;
-	name: string;
-	slug: string;
-	created_at: string;
-	member_count: number;
-	members?: TeamMemberRef[];
+  id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+  member_count: number;
+  members?: TeamMemberRef[];
 };
 
 export type TeamMemberRef = {
-	id: string;
-	name: string;
-	email: string;
-	avatar_url?: string;
-	routing_priority: number;
-	archived: boolean;
+  id: string;
+  name: string;
+  email: string;
+  avatar_url?: string;
+  routing_priority: number;
+  archived: boolean;
 };
 
 export type UpcomingBooking = {
-	id: string;
-	start_at: string;
-	end_at: string;
-	event_type_name: string;
-	event_type_slug: string;
-	attendee_name: string;
-	attendee_email: string;
+  id: string;
+  start_at: string;
+  end_at: string;
+  event_type_name: string;
+  event_type_slug: string;
+  attendee_name: string;
+  attendee_email: string;
 };
 
 export type Invite = {
-	id: string;
-	email: string;
-	expires_at: string;
-	created_by: string;
+  id: string;
+  email: string;
+  expires_at: string;
+  created_by: string;
 };
 
 export type AvailabilityRule = {
-	id: string;
-	event_type_id: string | null;
-	day_of_week: number;
-	start_time: string;
-	end_time: string;
+  id: string;
+  event_type_id: string | null;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
 };
 
 export type AvailabilityOverride = {
-	id: string;
-	date: string;
-	is_available: boolean;
-	reason: 'day_off' | 'out_of_office' | 'custom_hours';
-	start_time: string | null;
-	end_time: string | null;
-	/** Set on per-date rows that belong to a multi-day out-of-office span. */
-	group_id?: string;
+  id: string;
+  date: string;
+  is_available: boolean;
+  reason: "day_off" | "out_of_office" | "custom_hours";
+  start_time: string | null;
+  end_time: string | null;
+  /** Set on per-date rows that belong to a multi-day out-of-office span. */
+  group_id?: string;
 };
 
 async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
-	const res = await fetch(path, {
-		credentials: 'same-origin',
-		headers: {
-			...(opts.body && typeof opts.body === 'string'
-				? { 'Content-Type': 'application/json' }
-				: {}),
-			...((opts.headers as Record<string, string>) ?? {})
-		},
-		...opts
-	});
+  const res = await fetch(path, {
+    credentials: "same-origin",
+    headers: {
+      ...(opts.body && typeof opts.body === "string"
+        ? { "Content-Type": "application/json" }
+        : {}),
+      ...((opts.headers as Record<string, string>) ?? {}),
+    },
+    ...opts,
+  });
 
-	if (res.status === 401) {
-		window.location.href = '/admin/login';
-		throw new Error('unauthenticated');
-	}
+  if (res.status === 401) {
+    window.location.href = "/admin/login";
+    throw new Error("unauthenticated");
+  }
 
-	if (res.status === 204) return null as T;
+  if (res.status === 204) return null as T;
 
-	const data = await res.json().catch(() => ({ error: res.statusText }));
-	if (!res.ok) {
-		const err = new Error(data.error ?? `HTTP ${res.status}`) as Error & { status?: number };
-		err.status = res.status;
-		throw err;
-	}
-	return data as T;
+  const data = await res.json().catch(() => ({ error: res.statusText }));
+  if (!res.ok) {
+    const err = new Error(data.error ?? `HTTP ${res.status}`) as Error & {
+      status?: number;
+    };
+    err.status = res.status;
+    throw err;
+  }
+  return data as T;
 }
 
 export const api = {
-	get: <T>(path: string) => apiFetch<T>(path),
+  get: <T>(path: string) => apiFetch<T>(path),
 
-	post: <T>(path: string, body?: unknown) =>
-		apiFetch<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
+  post: <T>(path: string, body?: unknown) =>
+    apiFetch<T>(path, {
+      method: "POST",
+      body: body ? JSON.stringify(body) : undefined,
+    }),
 
-	postForm: <T>(path: string, data: FormData) =>
-		apiFetch<T>(path, { method: 'POST', body: data }),
+  postForm: <T>(path: string, data: FormData) =>
+    apiFetch<T>(path, { method: "POST", body: data }),
 
-	patch: <T>(path: string, body?: unknown) =>
-		apiFetch<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
+  patch: <T>(path: string, body?: unknown) =>
+    apiFetch<T>(path, {
+      method: "PATCH",
+      body: body ? JSON.stringify(body) : undefined,
+    }),
 
-	put: <T>(path: string, body?: unknown) =>
-		apiFetch<T>(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }),
+  put: <T>(path: string, body?: unknown) =>
+    apiFetch<T>(path, {
+      method: "PUT",
+      body: body ? JSON.stringify(body) : undefined,
+    }),
 
-	del: <T = null>(path: string) => apiFetch<T>(path, { method: 'DELETE' })
+  del: <T = null>(path: string) => apiFetch<T>(path, { method: "DELETE" }),
 };

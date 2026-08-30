@@ -360,8 +360,8 @@
 									<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Intake responses</p>
 									{#if answersLoading[b.id]}
 										<p class="text-sm text-muted-foreground">Loading…</p>
-									{:else if !answersCache[b.id] || answersCache[b.id].length === 0}
-										<p class="text-sm text-muted-foreground">No intake responses for this booking.</p>
+									<!-- {:else if !answersCache[b.id] || answersCache[b.id].length === 0}
+										<p class="text-sm text-muted-foreground">No intake responses for this booking.</p> -->
 									{:else}
 										<dl class="space-y-2">
 											{#each answersCache[b.id] as a}
