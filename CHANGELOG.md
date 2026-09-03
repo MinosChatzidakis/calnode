@@ -11,6 +11,84 @@ exact tag (`ghcr.io/calnode/calnode:0.1.0`) if you need stability between upgrad
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-03
+
+### Added
+- **Booked times can be shown struck through instead of hidden.** Off by default, and
+  enabled per event type under Visibility. Requested in
+  [#14](https://github.com/Calnode/calnode/discussions/14), tracked as
+  [#19](https://github.com/Calnode/calnode/issues/19).
+
+  For a public-hours use case - an intro call, a clinic, a tutor - a visibly busy
+  calendar communicates demand, and an empty-looking list reads as "nothing here". It
+  stays off by default because the slots endpoint is public and unauthenticated, so
+  turning it on makes a host's booked hours legible to anyone with the link. That is a
+  fair trade when the hours are already public and a privacy regression when they are
+  not, so it is never inherited by upgrading.
+
+  Only starts a booking or calendar conflict removed are shown. Times outside the host's
+  working hours are never rendered, and times withheld by the minimum-notice rule are
+  never shown as taken - nobody booked those, and saying so would corrupt the signal the
+  feature exists to send. Booked times cannot be selected on any surface, and agents
+  using the MCP tools or the booking assistant continue to see only bookable times.
+
+  `GET /v1/event-types/{slug}/slots` gains a `taken` array for opted-in event types,
+  absent otherwise. Event types gain `show_taken_slots` (migration 00057).
+
+## [0.7.0] - 2026-09-03
+
+### Added
+- **Filter and page the bookings list.** The bookings page now filters by event type,
+  host, team and status alongside the existing Upcoming/Past and Mine/All toggles, and
+  pages through results 25 at a time instead of rendering everything at once. Requested
+  in [#15](https://github.com/Calnode/calnode/discussions/15), tracked as
+  [#18](https://github.com/Calnode/calnode/issues/18).
+
+  `GET /v1/bookings` gained `event_type`, `host`, `team`, `status`, `when`, `from`,
+  `to`, `order`, `limit` and `offset` query parameters, and its response now carries
+  `total`, `counts` and the active `limit`/`offset` beside `items`. MCP `list_bookings`
+  gained `team_id`, `limit` and `offset`, and returns `total`.
+
+### Fixed
+- **A running instance now reports which commit it is.** `/version` reported
+  `commit: unknown` on every container, because the image is built from a copied
+  source tree with no `.git` for the Go toolchain to read VCS metadata from. That was
+  survivable while only tagged releases were deployed; it is not now that branch
+  images can be, since those report `version: dev` and nothing else identified the
+  build. The commit is stamped explicitly at build time instead.
+- **Webhook deliveries are no longer kept forever.** Nothing ever purged
+  `webhook_deliveries`, so on a busy instance the table grew for the life of the
+  deployment, inside the SQLite file Litestream replicates offsite. The worker now
+  sweeps finished deliveries after 30 days, alongside the five other tables it already
+  purged. Only rows that reached `success` or `failed` are removed: a pending delivery
+  still has a job pointing at it, and deleting one would turn a deliverable webhook
+  into a permanent failure. The deliveries view only ever showed the 50 most recent, so
+  nothing visible changes.
+- **`status=cancelled` returned nothing, on every surface.** Both booking list queries
+  hardcoded an exclusion of cancelled bookings and then filtered on top of that result,
+  so asking for cancelled bookings could never match anything - including through the
+  MCP tool whose own schema advertises `cancelled` as a valid value. There was no way at
+  all to view a cancelled booking. An explicit status now replaces the default exclusion
+  instead of being applied after it; omitting it still hides cancelled bookings.
+- **Filtering by host missed the meetings that person attends but doesn't lead.** The
+  host filter compared `bookings.host_id` only, while visibility has always counted a
+  user as hosting a booking if they are the primary host *or* an assigned host. Group
+  meetings someone was on were therefore invisible when filtering to them.
+
+### Changed
+- **Bookings are selected in SQL rather than in the browser.** `GET /v1/bookings` and
+  MCP `list_bookings` previously loaded every booking the caller could see and then
+  filtered and sorted the result in Go or in Svelte, running follow-up queries whose
+  `IN` clause held every booking id returned, against a single-connection pool. Both now
+  share one filtered, ordered, paginated query.
+- **Indexed the bookings list.** The only indexes on `bookings` both led on `host_id`
+  and were partial, so every listing planned as a full scan plus a temporary B-tree
+  sort of the whole matching set to return one page. Paginating the API alone would
+  have made the response smaller without making the work smaller. `(start_at, id)` and
+  `(event_type_id, start_at, id)` (migration 00056) turn the page query into an index
+  walk that stops at the limit. The Upcoming/Past counts are an aggregate and still
+  scan by design.
+
 ## [0.6.0] - 2026-08-30
 
 ### Fixed

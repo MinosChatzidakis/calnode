@@ -290,6 +290,42 @@ members.
   from memory (instant, zero extra requests). Falls back to a single-day fetch if
   clicked before the month load lands. Timezone change rebuilds the cache.
 
+### Showing booked times ("taken" slots)
+
+`event_types.show_taken_slots` (migration 00057, **default off**) opts one event type
+into rendering already-booked starts struck through instead of hiding them. Requested
+in discussion #14, issue #19.
+
+- **Why it is opt-in.** `/slots` is public and unauthenticated, so this makes a host's
+  booked hours legible to anyone with the link. Fair for a public-hours use case (an
+  intro call, a clinic), a privacy regression for an instance fronting a team's internal
+  calendars. Never inherited by upgrading; a test asserts the field is absent until
+  chosen.
+- **"Taken" is defined by difference, not by reason.** `slots.GenerateWithTaken` walks
+  the range twice - once normally, once with every host's `Busy` ignored - and reports
+  what the second pass offered and the first did not. This is correct for every routing
+  mode with no special-casing, and it makes three mislabellings *structurally*
+  impossible: a start outside working hours, one withheld by minimum notice, and one
+  lost to a host pool that cannot satisfy the routing mode are absent from both passes
+  and cancel out. Greying a slot asserts "somebody booked this", so saying it about a
+  time the host does not work would mislead the booker and expose the working day.
+  Buffers *do* count as taken; the start really is unbookable.
+- **Taken slots carry no host ids.** The page needs the time; naming who is busy
+  discloses more about an individual than greying requires.
+- **Agents never see them.** `computeSlots` takes an explicit `includeTaken`, and MCP
+  `get_available_slots` and the booking assistant both pass false. A taken slot in an
+  agent's list is one it will eventually offer, with nothing in the payload to tell it
+  apart. Asserted at the MCP surface with the event type opted in.
+- **`taken` is absent, not empty, when off** - a client must distinguish "does not show
+  taken times" from "opted in, nothing booked today".
+- **Client side:** `mergeDaySlots` and `bookableDayKeys` in the shared
+  `assets/booking-logic.js`, so all three surfaces share one implementation. Free and
+  taken stay separate on the wire and are combined only for display. `bookableDayKeys`
+  exists for a specific trap: once taken slots are grouped by day too, a fully booked
+  day still produces a key, and using those keys for the calendar would advertise it as
+  having something available. Fully booked days *are* still openable, deliberately - a
+  list of struck-through times explains itself better than a dead date.
+
 ---
 
 ## 9. Booking lifecycle
@@ -312,6 +348,34 @@ members.
   a key reused with a *different* body → 422, and the key is released on any failure
   so a genuine retry can proceed. Worker purges keys after 24h (§13). The public
   booking page sends no key, so this path is inert for normal bookings.
+- **List / filter / paginate:** `booking.ListFilter` + `booking.List`/`Counts`
+  (`internal/booking/list.go`) is the one place bookings are selected. It applies
+  visibility (`ViewerID` pins a member to bookings they host, primary *or* assigned;
+  empty means the whole workspace and callers gate that on admin), then narrows by
+  event type, host, team, status, date range and upcoming/past, then orders and pages
+  - **all in SQL**. `GET /v1/bookings` and MCP `list_bookings` both go through it, and
+  the admin page passes its filters straight down.
+  - **Why it isn't done in the client:** the list used to return *every* booking the
+    caller could see, then run enrichment queries whose `IN` clause held every id
+    returned, on the single-connection pool (§17). Pages are capped
+    (`bookingsPageMax`).
+  - **Paging needs the index to mean anything.** Both pre-existing indexes on
+    `bookings` lead on `host_id` and are partial, so a listing planned as
+    `SCAN ... USE TEMP B-TREE FOR ORDER BY`: the whole matching set sorted to return
+    25 rows. Migration 00056 adds `(start_at, id)` and
+    `(event_type_id, start_at, id)`, which turn that into an index walk that stops at
+    the `LIMIT`. `Counts` is an aggregate over the match set and still scans; that is
+    inherent, and it replaced a scan that also materialised every row.
+  - `Counts` is a separate query and deliberately ignores `When`/`Limit`/`Offset`, so
+    the Upcoming/Past tab labels describe the whole match set rather than the page.
+    Deriving them from `len(items)` is the obvious mistake once paging exists.
+  - **An explicit `status` replaces the default cancelled-exclusion rather than
+    filtering after it.** Both list paths previously hardcoded `status != 'cancelled'`
+    and filtered on top, so `status=cancelled` - a value MCP's own schema advertises -
+    could never match anything.
+  - **Teams resolve through membership**, not `event_types.team_id`: that column exists
+    but nothing writes it, because a team is a shortcut for populating
+    `event_type_hosts`. A member of two teams therefore appears under both.
 - **Public-surface abuse controls:** the `/slots` endpoint is rate-limited (60/min/IP,
   `slotsRL`) and `POST /v1/bookings` (20/min/IP, `bookingRL`); a per-email hourly cap
   (`maxBookingsPerEmailPerHour`) backstops rotating-IP spam; and the booking form has a
@@ -565,8 +629,9 @@ as the desired state:
 
 - `internal/worker`: polls the `jobs` table **every 5s** (batch ≤10). Job types:
   `webhook.deliver` and `reminder.send`. Also purges expired manage tokens +
-  sessions + idempotency keys (>24h old) each cycle, and reaps jobs whose 30s lock
-  expired (crash recovery —
+  sessions + magic-link tokens + idempotency keys (>24h old) + OAuth auth codes +
+  **finished webhook deliveries (>30d, `webhookDeliveryRetention`)** each cycle, and
+  reaps jobs whose 30s lock expired (crash recovery —
   reset to pending +1 min). Retry **backoff is a fixed two-step: 60s then 5 min**
   (not exponential), `max_attempts` 3. Atomic claim via
   `UPDATE … WHERE status='pending'` + RowsAffected.
@@ -694,7 +759,11 @@ A Model Context Protocol server is compiled into the binary on the official Go S
 (`internal/handler/mcp.go`) builds one server instance exposing eight typed tools
 (schema generated from Go structs): `list_event_types`, `get_event_type`,
 `get_available_slots`, `create_booking`, `get_booking`, `reschedule_booking`,
-`cancel_booking`, `list_bookings`. `get_event_type` returns an event type's intake
+`cancel_booking`, `list_bookings`. `list_bookings` filters (`status`, `date_from`,
+`date_to`, `event_type_id` as a slug, `host_id`, `team_id`) and pages (`limit`,
+`offset`, with `total` in the result) through the same SQL path as the REST list
+(§9) - it used to load everything and filter the slice in Go.
+`get_event_type` returns an event type's intake
 **questions** (required flags + options) + hosts so an agent can supply valid answers
 to `create_booking` — without it the booking tools are subtly unreliable for event
 types that have required questions.
