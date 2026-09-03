@@ -635,8 +635,8 @@ func (h *Handler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		// from headers alone. See internal-docs/i18n-plan.md.
 		Language string `json:"language"`
 		//Company  string `json:"company"` // honeypot: a hidden form field; must stay empty
-		URL  string `json:"url"` // honeypot: a hidden form field; must stay empty
-		Answers  []struct {
+		URL     string `json:"url"` // honeypot: a hidden form field; must stay empty
+		Answers []struct {
 			QuestionID string `json:"question_id"`
 			Value      string `json:"value"`
 		} `json:"answers"`

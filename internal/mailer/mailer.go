@@ -1,9 +1,9 @@
 package mailer
 
 import (
-    "context"
+	"context"
 	"fmt"
-    "net/smtp"
+	"net/smtp"
 )
 
 // Attachment is a file attached to an outbound email.
@@ -32,7 +32,6 @@ type Noop struct{}
 
 func (n *Noop) Send(_ context.Context, _ Message) error { return nil }
 
-
 type loginAuth struct {
 	username, password string
 }
@@ -42,9 +41,9 @@ func LoginAuth(username, password string) smtp.Auth {
 }
 
 func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
-    // This sends: AUTH LOGIN
-    // The server will then prompt for the username, which your Next() method will catch.
-    return "LOGIN", nil, nil 
+	// This sends: AUTH LOGIN
+	// The server will then prompt for the username, which your Next() method will catch.
+	return "LOGIN", nil, nil
 }
 
 func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
