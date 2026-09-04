@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/calnode/calnode/internal/uid"
 )
@@ -19,7 +20,7 @@ func slugify(s string) string {
 	lastHyphen := false
 	for _, r := range s {
 		switch {
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || unicode.Is(unicode.Greek, r):
 			b.WriteRune(r)
 			lastHyphen = false
 		case r == ' ' || r == '-' || r == '_':
