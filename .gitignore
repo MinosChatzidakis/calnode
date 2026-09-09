@@ -28,6 +28,7 @@ data-demo/
 # Environment — allow .env.example as a committed template
 .env
 .env.*
+.env2
 !.env.example
 
 # Go
