@@ -327,6 +327,7 @@ body {
     nameEl.textContent = defaultName;
   }
 
+
   // LOCALE (the resolved server-side locale, not the browser's own) drives these, not
   // [] — otherwise a visitor who picked a language via the switcher, or whose
   // Accept-Language differs from navigator.language, would see translated chrome next
@@ -874,6 +875,30 @@ body {
 }());
 </script>
 {{end}}
+<div style="display: flex; justify-content: center; margin-top: 1.5rem; margin-bottom: 1rem; width: 100%;">
+  <button type="button" id="newsearchcontainer" style="background-color: #111827; color: #ffffff; padding: 0.75rem 1.5rem; border-radius: 0.5rem; border: none; font-weight: 600; font-size: 0.875rem; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+    Start a new search
+  </button>
+</div>
+
+<script>
+  // Safe execution wrapper
+  document.addEventListener("DOMContentLoaded", function() {
+    var myDiv = document.getElementById("newsearchcontainer");
+    
+    // Safety check: only attach if the button exists
+    if (myDiv) {
+      myDiv.addEventListener("click", function(event) {
+        event.preventDefault(); 
+        
+        // This actually redirects the browser to the home page
+        window.location.href = "/"; 
+      });
+    }
+  });
+</script>
 {{template "consentBanner" .}}
+</body>
+</html>
 </body>
 </html>
