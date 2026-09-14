@@ -40,7 +40,14 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 	h := handler.New(db, logger)
 	h.SetBaseURL(cfg.BaseURL)
 	h.SetPublicBaseURL(cfg.PublicBaseURL)
-	h.SetDataDir("data")
+	// DATA_DIR, defaulting to the relative "data" every deployment has always used.
+	// The fallback is repeated here because tests build a Config literal that skips
+	// Load, and an empty dir would put uploads beside the binary.
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = "data"
+	}
+	h.SetDataDir(dataDir)
 	h.SetEncKey(cfg.EncryptionKey)
 	h.SetDemoMode(cfg.DemoMode)
 	h.SetDemoResetInterval(cfg.DemoResetInterval)
@@ -384,6 +391,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("GET /v1/event-types/{slug}", h.RequireAuth(h.GetEventType))
 	mux.HandleFunc("PATCH /v1/event-types/{slug}", h.RequireAuth(h.PatchEventType))
 	mux.HandleFunc("DELETE /v1/event-types/{slug}", h.RequireAuth(h.DeleteEventType))
+	mux.HandleFunc("POST /v1/event-types/{slug}/duplicate", h.RequireAuth(h.DuplicateEventType))
 	mux.HandleFunc("GET /v1/event-types/{slug}/hosts", h.RequireAuth(h.ListEventTypeHosts))
 	mux.HandleFunc("PUT /v1/event-types/{slug}/hosts", h.RequireAuth(h.SetEventTypeHosts))
 	testEmailRL := RateLimit(10, time.Minute)
@@ -536,7 +544,19 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	// permanently if a marketing landing page is ever added here.
 	mux.Handle("GET /{$}", http.RedirectHandler("/admin/", http.StatusFound))
 
-	return RequestID(Logging(logger, SameOriginCheck(mux))), drain
+	// Trusted-proxy resolution wraps everything, so the per-IP limiters and anything else
+	// asking for the client IP see one answer computed once. A bad CIDR is logged and
+	// dropped rather than fatal: the consequence is that that hop's headers are not
+	// believed, which costs shared rate-limit buckets, never a trusted forgery.
+	trustedProxies, err := ParseTrustedProxies(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		logger.Error("TRUSTED_PROXY_CIDRS: ignoring unparseable entries", "error", err)
+	}
+	if len(trustedProxies) > 0 {
+		logger.Info("trusting forwarded headers from proxies", "cidrs", cfg.TrustedProxyCIDRs)
+	}
+
+	return TrustClientIP(trustedProxies)(RequestID(Logging(logger, SameOriginCheck(mux)))), drain
 }
 
 // seedSMTPToDB writes env-var SMTP settings into the DB on first boot so they

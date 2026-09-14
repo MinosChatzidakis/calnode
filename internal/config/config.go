@@ -40,6 +40,13 @@ type Config struct {
 	ZoomClientID     string
 	ZoomClientSecret string
 
+	// DataDir is where uploaded files (avatars, branding assets) are written.
+	// Defaults to the relative directory "data", which is what every existing
+	// deployment has always used; set DATA_DIR when the process runs somewhere
+	// its working directory is not writable, such as a read-only container image
+	// that mounts a volume elsewhere.
+	DataDir string
+
 	// CookieSecure sets the Secure flag on session cookies. Defaults to true
 	// when BASE_URL starts with https://, but can be overridden explicitly via
 	// COOKIE_SECURE=false for HTTPS-terminated-at-proxy setups where the binary
@@ -51,6 +58,14 @@ type Config struct {
 	// (`*`). CORS only constrains browsers; it is not an access-control boundary —
 	// the public endpoints are rate-limited regardless. Comma-separated.
 	EmbedAllowedOrigins []string
+
+	// TrustedProxyCIDRs lists the networks whose forwarded headers are believed when
+	// resolving the client IP for per-IP rate limiting. Empty (the default) ⇒ the limit
+	// keys on the TCP peer and X-Forwarded-For is ignored entirely, because a header
+	// from an unvetted peer is a client-chosen value. Comma-separated CIDRs; a bare
+	// address is taken as a single host. A fronting CDN's own ranges belong here: the
+	// walk steps over its edge address and lands on the visitor.
+	TrustedProxyCIDRs []string
 
 	// DemoMode turns this instance into a public, self-resetting demo: seeds sample
 	// data on every boot (there's no persistent volume, so every boot is a fresh DB),
@@ -89,6 +104,8 @@ func Load() *Config {
 		ZoomClientSecret: getEnv("ZOOM_CLIENT_SECRET", ""),
 
 		EmbedAllowedOrigins: splitCSV(getEnv("EMBED_ALLOWED_ORIGINS", "")),
+		DataDir:             getEnv("DATA_DIR", "data"),
+		TrustedProxyCIDRs:   splitCSV(getEnv("TRUSTED_PROXY_CIDRS", "")),
 	}
 
 	cfg.EncryptionKey = os.Getenv("CALNODE_ENCRYPTION_KEY")

@@ -31,6 +31,14 @@ type slotsResult struct {
 	// being nil does not work, because converting an empty result yields an empty
 	// non-nil slice.
 	ShowsTaken bool
+	// MinNoticeMinutes is the event type's minimum-notice policy; 0 = none.
+	MinNoticeMinutes int
+	// MinNoticeDates are the days (YYYY-MM-DD, in the requested timezone, so they match
+	// the keys the booking surfaces group slots by) on which that policy removed at
+	// least one start that was otherwise bookable. It is the only thing a surface needs
+	// to decide whether to explain a thin or empty day, and it says nothing about which
+	// times or which host - see slots.Result.NoticeGap.
+	MinNoticeDates []string
 }
 
 // Sentinel errors from computeSlots, so non-HTTP callers (the MCP tools) can map
@@ -53,7 +61,8 @@ func (h *Handler) GetSlots(w http.ResponseWriter, r *http.Request) {
 	// The public booking page is the one surface that may see taken slots, and only
 	// when the event type opted in; computeSlots enforces the second half.
 	res, err := h.computeSlots(r.Context(), slug, tzName,
-		r.URL.Query().Get("from"), r.URL.Query().Get("to"), true)
+		r.URL.Query().Get("from"), r.URL.Query().Get("to"),
+		slotsWanted{Taken: true, NoticeGap: true})
 	switch {
 	case errors.Is(err, errEventTypeNotFound):
 		h.writeError(w, http.StatusNotFound, "event type not found")
@@ -75,7 +84,62 @@ func (h *Handler) GetSlots(w http.ResponseWriter, r *http.Request) {
 	if res.ShowsTaken {
 		body["taken"] = res.Taken
 	}
+	// Present whenever the event type sets a minimum notice, with an empty `dates` when
+	// the policy happened to remove nothing in this range. Same reasoning as `taken`: a
+	// client can tell "there is no such policy" from "the policy cost you nothing here",
+	// and only the second is worth explaining. `minutes` lets a client that has no
+	// localized label of its own still say something.
+	//
+	// On why this is NOT behind an opt-in the way show_taken_slots is (#19). This
+	// endpoint is public and unauthenticated, and `dates` does disclose something: an
+	// empty day is normally ambiguous between "the host does not work then", "the host
+	// is fully booked" and "it is inside the notice window", and naming the day resolves
+	// that to the third. So a reader learns the host had free working hours on it.
+	//
+	// It is shipped on by default anyway, for three reasons, and they are written down
+	// here so the trade is re-argued rather than rediscovered:
+	//
+	//   - It is day-granularity. show_taken_slots discloses WHICH HOURS are booked
+	//     across the whole visible range; this discloses that one or two days near now
+	//     contained at least one free start. That is a much smaller statement.
+	//   - It is bounded by the notice window, which is a day or two, not the calendar.
+	//   - Most of it is already derivable. min_notice_minutes ships on the public event
+	//     type payload, so any client can compute the window itself from `now`. The only
+	//     genuinely new bit is that the host was free somewhere inside it.
+	//
+	// The deciding argument is that gating it would default the feature to off, and a
+	// feature whose entire purpose is to explain an empty screen is worth nothing when
+	// it is off. If that balance ever changes - a deployment fronting private internal
+	// calendars, say - the gate belongs on the event type next to show_taken_slots, not
+	// here.
+	if res.MinNoticeMinutes > 0 {
+		dates := res.MinNoticeDates
+		if dates == nil {
+			dates = []string{}
+		}
+		body["min_notice"] = map[string]any{
+			"minutes": res.MinNoticeMinutes,
+			"dates":   dates,
+		}
+	}
 	h.writeJSON(w, http.StatusOK, body)
+}
+
+// slotsWanted selects the optional outputs of a slots computation. Both cost real work
+// and both are public-booking-surface concerns, so every caller says what it needs
+// rather than paying for the maximum.
+//
+// The agent-facing callers (the MCP tool, the booking assistant) want NEITHER, and for
+// different reasons. Taken slots are times an agent would eventually offer with nothing
+// in the payload to mark them unbookable. The notice gap is a presentation aid for a
+// human staring at a thin calendar; an agent is handed only bookable times and has
+// nothing to explain.
+type slotsWanted struct {
+	// Taken asks for the starts a booking or calendar conflict removed. Still subject
+	// to the event type's own show_taken_slots opt-in.
+	Taken bool
+	// NoticeGap asks which days the minimum-notice rule took a bookable start from.
+	NoticeGap bool
 }
 
 // computeSlots returns the bookable slots (and the candidate hosts' display map) for
@@ -83,7 +147,7 @@ func (h *Handler) GetSlots(w http.ResponseWriter, r *http.Request) {
 // the shared core behind the REST GetSlots handler and the MCP get_available_slots
 // tool. tzName "" → UTC; fromStr/toStr "" → today / the max-future cap. Returns one
 // of the sentinel errors above on bad input, or a wrapped error on internal failure.
-func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr string, includeTaken bool) (slotsResult, error) {
+func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr string, want slotsWanted) (slotsResult, error) {
 	et, err := h.loadBookableEventType(ctx, slug)
 	if err != nil {
 		return slotsResult{}, err
@@ -126,8 +190,13 @@ func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr
 	}
 	if len(pool) == 0 {
 		// No bookable hosts (e.g. all archived, or a round-robin with no rotation
-		// members) — offer nothing rather than erroring.
-		return slotsResult{Slots: []slotJSON{}, Hosts: map[string]map[string]string{}}, nil
+		// members) — offer nothing rather than erroring. The notice policy still travels,
+		// so the response shape doesn't depend on how the day turned out.
+		res := slotsResult{Slots: []slotJSON{}, Hosts: map[string]map[string]string{}}
+		if want.NoticeGap {
+			res.MinNoticeMinutes = et.MinNoticeMinutes
+		}
+		return res, nil
 	}
 
 	// Load each host's availability concurrently. The slow part is the Google
@@ -177,13 +246,8 @@ func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr
 	// Taken slots are produced only when the caller asked for them AND this event type
 	// opted in. GenerateWithTaken walks the range a second time with busy ignored, so
 	// it is not free, and it returns exactly the information the default must withhold.
-	showsTaken := includeTaken && et.ShowTakenSlots
-	var result, takenSlots []slots.Slot
-	if showsTaken {
-		result, takenSlots, err = slots.GenerateWithTaken(req)
-	} else {
-		result, err = slots.Generate(req)
-	}
+	showsTaken := want.Taken && et.ShowTakenSlots
+	result, err := slots.GenerateDetailed(req, slots.Extras{Taken: showsTaken, NoticeGap: want.NoticeGap})
 	if err != nil {
 		return slotsResult{}, fmt.Errorf("slots generate: %w", err)
 	}
@@ -195,12 +259,42 @@ func (h *Handler) computeSlots(ctx context.Context, slug, tzName, fromStr, toStr
 	for i, ph := range pool {
 		poolIDs[i] = ph.id
 	}
-	return slotsResult{
-		Slots:      toSlotJSON(result),
-		Taken:      toSlotJSON(takenSlots),
+	res := slotsResult{
+		Slots:      toSlotJSON(result.Free),
+		Taken:      toSlotJSON(result.Taken),
 		Hosts:      h.hostDisplayMap(ctx, poolIDs),
 		ShowsTaken: showsTaken,
-	}, nil
+	}
+	if want.NoticeGap {
+		res.MinNoticeMinutes = et.MinNoticeMinutes
+		res.MinNoticeDates = noticeDates(result.NoticeGap)
+	}
+	return res, nil
+}
+
+// noticeDates reduces the starts the minimum-notice rule withheld to the distinct days
+// they fall on, ascending. The engine renders those starts in the booker's timezone, so
+// formatting them here yields the same YYYY-MM-DD keys the booking surfaces group their
+// slots by.
+//
+// A day is all a surface needs to explain the gap, and it is all that is sent: the
+// individual withheld times would describe the host's working hours at a finer grain than
+// the feature requires.
+func noticeDates(gap []slots.Slot) []string {
+	if len(gap) == 0 {
+		return nil
+	}
+	out := make([]string, 0, 2) // the notice window spans a day or two at most
+	seen := make(map[string]bool, 2)
+	for _, s := range gap {
+		day := s.Start.Format("2006-01-02")
+		if seen[day] {
+			continue
+		}
+		seen[day] = true
+		out = append(out, day)
+	}
+	return out
 }
 
 // toSlotJSON renders engine slots for the wire. Taken slots carry no host ids, so

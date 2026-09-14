@@ -51,8 +51,17 @@ behaviour or markup must usually be made in all three, or they drift:
   implemented separately in each. If you change calendar *behaviour*, update all three.
 - Verify on **desktop and mobile** for each surface after touching the calendar.
 - **Shared slot logic lives in `internal/handler/assets/booking-logic.js`** (tested with
-  `node --test`), not per-surface: day grouping, time formatting, and the taken-slot
-  merge. Put anything all three need there rather than writing it three times.
+  `node --test`): day grouping, time formatting, and the taken-slot merge. It is inlined
+  into **book.html and manage.html only**, which are the two surfaces that load it.
+- ⛔ **The embed widget does NOT load `booking-logic.js`, so `BookingLogic` is undefined
+  inside it.** `EmbedJS` serves `embed.js` as its own standalone file, unmodified — it is a
+  Shadow-DOM web component on a third-party page, with no build step and nothing to
+  prepend the module for it. It therefore carries its own copies of the few helpers it
+  needs (`dowLabels`, `dayKey`, `timeLabel`, `shortDay`, `ymd`), each commented as
+  mirroring the shared one. Calling `BookingLogic.anything` from `embed.js` throws a
+  `ReferenceError` on the customer's site, where no test here would see it. So: put logic
+  the pages share in `booking-logic.js`, and when the widget needs it too, mirror it there
+  deliberately and keep the two in step.
 - **Taken/booked slots** (`show_taken_slots`, off by default) are computed by
   `slots.GenerateWithTaken` as the *difference* between a normal pass and one ignoring
   busy, which is what keeps out-of-hours and min-notice starts from being mislabelled as
@@ -147,6 +156,30 @@ globs the directory; the switcher, the fallback dropdown and the public API payl
 - **Every non-English locale is an LLM draft with no native review.** Structure is verified;
   wording is not. Say so before anyone markets a language.
 
+### Where a translated sentence gets assembled
+
+**Default: server-side.** Go composes the finished sentence and the page renders it as
+given. `durationLabel`, `hostsLabel`, `locationLabel`, `assistantGreeting` and
+`noticeLabel` (`book.go`) are the pattern - they return text, not parts. Keeping it there
+is what stops plural rules, duration wording and date formats from being reinvented in
+three separate front ends, only one of which has tests.
+
+**One exception, and it is the only one:** a booking-surface string whose argument is
+chosen by the visitor *after the page loads* may be substituted client-side, via
+`BookingLogic.fmt` (book/manage) or its deliberate mirror in `embed.js`. Today that is
+exactly the selected date, in `no_available_times`, `no_available_times_host` and
+`min_notice_hint`. The alternative is a server round-trip on every calendar click, or
+shipping a month of pre-rendered sentences to render one.
+
+The line that still holds inside the exception: **anything locale-dependent is computed
+in Go and passed in as a finished fragment.** `MinNoticeLabel` is the model - the server
+sends "4 hours" already pluralised and translated, and the page only drops it into a
+slot. `fmt` handles `%s` and the indexed `%[n]s` (so a translation can reorder its
+arguments) and nothing else; it is not a printf and must not become one.
+
+**If you are building a plural form, a duration or a date format in JavaScript, you have
+crossed the line** - move it into `book.go` and send the result.
+
 ## Email - two transports, and the SMTP trap
 
 `internal/mailer` has **two** real transports behind one `Mailer` interface: `smtp.go` and
@@ -184,6 +217,20 @@ exactly like duration being ignored.
 Keep the editor's floor aligned with the API's (`>= 1`). A stricter client-side minimum makes
 an event type configured below it via the API unsaveable from the editor, even when the person
 is editing an unrelated field.
+
+**The general rule, learned twice:** the admin editor submits the WHOLE form on every save,
+so validating a field merely because the request mentions it validates fields the operator
+never touched. Any event type holding a stored value the current rules reject then becomes
+unsaveable entirely, with an error pointing at something unrelated. Validate on **change**
+(effective value vs stored), not on **mention**. Rows reach those states legitimately: a
+provider disconnected after the fact, a duplicate that inherited one (#22), a seeder writing
+straight to the table, or a create path that defaulted the field before a rule tightened.
+
+The other half of the same rule: **anything written without validation must be valid by
+construction.** `CreateEventType` skips `validateLocation` when it defaults the location,
+because there is no request field to blame an error on - so every branch of
+`smartDefaultLocation` has to return a type the owner can actually host at. It used to end
+at an unconditional `"zoom"`.
 
 ## Conventions
 
