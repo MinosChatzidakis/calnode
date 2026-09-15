@@ -277,7 +277,7 @@ func (w *Worker) sendReminder(ctx context.Context, payload string) error {
 		       u.name, u.email, COALESCE(u.notify_reminder, 1)
 		FROM bookings b
 		JOIN event_types et ON et.id = b.event_type_id
-		JOIN users u ON u.id = et.user_id
+		JOIN users u ON u.id = b.host_id
 		WHERE b.id = ?`, p.BookingID).
 		Scan(&status, &startAt, &endAt, &locVal,
 			&d.EventTypeName, &d.EventTypeSlug, &msgReminder, &subjReminder,
