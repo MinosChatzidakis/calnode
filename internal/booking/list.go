@@ -99,8 +99,6 @@ func (f ListFilter) where(includeWhen bool) (string, []any) {
 	if f.Status != "" {
 		conds = append(conds, "bookings.status = ?")
 		args = append(args, f.Status)
-	} else {
-		conds = append(conds, "bookings.status != 'cancelled'")
 	}
 	if f.ViewerID != "" {
 		conds = append(conds, hostsBooking)
@@ -134,6 +132,9 @@ func (f ListFilter) where(includeWhen bool) (string, []any) {
 			conds = append(conds, "bookings.end_at >= ?")
 		}
 		args = append(args, sqlTime(f.Now))
+	}
+	if len(conds) == 0 {
+		return "", args
 	}
 	return "WHERE " + strings.Join(conds, "\n\t\t  AND "), args
 }
