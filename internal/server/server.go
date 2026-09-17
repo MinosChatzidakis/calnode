@@ -279,6 +279,8 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.HandleFunc("POST /v1/auth/login/email", loginRL(h.LoginEmail))
 	mux.HandleFunc("POST /v1/auth/magic-link/request", loginRL(h.RequestMagicLink))
 	mux.HandleFunc("GET /v1/auth/magic-link/verify", loginRL(h.VerifyMagicLink))
+	mux.HandleFunc("POST /v1/auth/password/forgot", loginRL(h.RequestPasswordReset))
+	mux.HandleFunc("POST /v1/auth/password/reset", loginRL(h.ResetPassword))
 
 	// OAuth login (browser sessions for admin UI).
 	authRL := RateLimit(10, time.Minute)
@@ -533,7 +535,10 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	mux.Handle("GET /favicon.ico", favicon)
 
 	// Admin SPA — served at /admin/* with SPA fallback for client-side routing.
-	adminSPA := frontend.Handler()
+	// FrameAncestors is applied here and nowhere else: FRAME_ANCESTORS is about embedding
+	// the admin console, and the public pages' own DENY must not be reachable from a
+	// config flag.
+	adminSPA := FrameAncestors(cfg.FrameAncestors)(frontend.Handler())
 	mux.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusMovedPermanently))
 	mux.Handle("/admin/", http.StripPrefix("/admin", adminSPA))
 

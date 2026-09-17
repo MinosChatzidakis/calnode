@@ -263,7 +263,7 @@ func (w *Worker) sendReminder(ctx context.Context, payload string) error {
 		return fmt.Errorf("worker: reminder: parse payload: %w", err)
 	}
 
-	// One query: join bookings → event_types → users (host).
+	// One query: join bookings → event_types → users (assigned host).
 	// Also load notify_reminder pref and msg_reminder custom note.
 	// Skip if booking is deleted or no longer confirmed.
 	var d mailer.BookingData
