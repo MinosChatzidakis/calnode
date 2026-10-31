@@ -17,6 +17,7 @@
 	import { saveOnCmdS } from '$lib/save-shortcut';
 	import QuestionsPanel from '$lib/components/event-types/QuestionsPanel.svelte';
 	import EmbedPanel from '$lib/components/event-types/EmbedPanel.svelte';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 
 	// Ordered by expected usage. 'custom_video' is retired from the picker but the
 	// backend still renders any legacy event types that use it.
@@ -43,6 +44,7 @@
 	const INVITE_DELIVERY = [
 		{ value: 'calendar', label: "The host's calendar" },
 		{ value: 'calnode',  label: 'Calnode, from your workspace' },
+		{ value: 'none',     label: 'Your own system' },
 	];
 
 	// ── Event type ───────────────────────────────────────────────────────────────
@@ -60,12 +62,17 @@
 	let etSaving = $state(false);
 
 	// Connected calendar (the owner's) — drives the meeting-link auto-generation hint.
+	// Only fetched when the viewer owns the event type: the status endpoints describe the
+	// caller's own connections, which say nothing about an event type an admin is editing
+	// for someone else.
 	let calStatus = $state<CalendarStatus | null>(null);
 	// Owner's Zoom connection — drives the Zoom auto-mint hint.
 	let zoomStatus = $state<ZoomStatus | null>(null);
 	// Which connected provider can natively mint each online platform's link.
 	const PLATFORM_PROVIDER: Record<string, string> = { google_meet: 'google', teams: 'microsoft' };
 	const isOnlineMeeting = (t: string) => t === 'google_meet' || t === 'teams';
+	// Any location that produces a join link the booker has to receive somehow.
+	const isOnlineLocation = (t: string) => isOnlineMeeting(t) || t === 'zoom' || t === 'livekit';
 
 	let form = $state({
 		display_order: 0,
@@ -78,6 +85,28 @@
 		max_active_bookings: 1,
 		price_cents: 0, currency: 'usd',
 	});
+
+	// "Your own system" means Calnode sends the booker nothing at all. When email is not
+	// configured that is easy to pick by accident and impossible to notice later, so it is
+	// confirmed once rather than applied silently.
+	let confirmNoneOpen = $state(false);
+	let noneAcknowledged = $state(false);
+	// Remounts the Select when a choice is declined. bits-ui keeps the clicked option as its
+	// internal selection even though the bound value did not change, so re-picking it fires no
+	// change event and the dialog would never reopen.
+	let inviteSelectReset = $state(0);
+
+	function requestInviteDelivery(v: string | undefined) {
+		if (!v) return;
+		const mode = v as EventType['invite_delivery'];
+		if (mode === 'none' && et?.invite_sender_ready === false && !noneAcknowledged) {
+			confirmNoneOpen = true;
+			inviteSelectReset += 1;
+			return;
+		}
+		form.invite_delivery = mode;
+		if (mode !== 'none') noneAcknowledged = false;
+	}
 
 	// Price is edited in major units (e.g. dollars); stored as integer cents.
 	let priceMajor = $state('0');
@@ -139,6 +168,10 @@
 	const routingMode = $derived(
 		hostScope === 'me' ? 'fixed' : staffing === 'rotate' ? 'round_robin' : 'collective'
 	);
+	// An admin editing someone else's event type: "Just me" then means the owner, and the
+	// owner's connections, not the admin's, decide which meeting links can be generated.
+	const editingForOwner = $derived(!!et && et.owned === false && et.can_edit !== false);
+	const ownerLabel = $derived(et?.owner_name || et?.owner_email || 'the owner');
 
 	async function loadHosts() {
 		try {
@@ -397,8 +430,10 @@
 					})),
 				});
 			} else {
+				// The owner, not the person saving: an admin saving someone else's single-host
+				// event type would otherwise make themselves its host.
 				await api.put(`/v1/event-types/${effSlug}/hosts`, {
-					hosts: [{ user_id: $currentUser?.id, role: 'required', priority: 0 }],
+					hosts: [{ user_id: et?.owner_id ?? $currentUser?.id, role: 'required', priority: 0 }],
 				});
 			}
 			toast.success('Changes saved');
@@ -462,11 +497,14 @@
 
 	onMount(async () => {
 		await loadET();
-		// Editor-only data (owner-scoped endpoints) — skip for read-only hosts.
-		if (et?.owned === false) return;
-		// Connected calendar — best-effort; drives the meeting-link hint only.
-		api.get<CalendarStatus>('/v1/calendar/status').then((s) => (calStatus = s)).catch(() => {});
-	api.get<ZoomStatus>('/v1/zoom/status').then((s) => (zoomStatus = s)).catch(() => {});
+		// Editor-only data — skip for read-only hosts.
+		if (et?.can_edit === false) return;
+		// Connected calendar — best-effort; drives the meeting-link hint only, and only
+		// for the owner's own event types (see calStatus).
+		if (et?.owned !== false) {
+			api.get<CalendarStatus>('/v1/calendar/status').then((s) => (calStatus = s)).catch(() => {});
+			api.get<ZoomStatus>('/v1/zoom/status').then((s) => (zoomStatus = s)).catch(() => {});
+		}
 		await loadHosts();
 		if (hostScope === 'people') {
 			loadMembers();
@@ -540,7 +578,7 @@
 	<p class="py-8 text-sm text-muted-foreground">Loading…</p>
 {:else if etError}
 	<p class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{etError}</p>
-{:else if et && et.owned === false}
+{:else if et && et.can_edit === false}
 
 <!-- Read-only: the user hosts this event type but doesn't own it -->
 <div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -569,6 +607,13 @@
 </div>
 
 {:else}
+
+{#if editingForOwner}
+<div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+	You're editing <span class="font-medium">{ownerLabel}</span>'s event type as an admin. It stays theirs,
+	and your own calendar and Zoom connections play no part in it.
+</div>
+{/if}
 
 <div class="mb-6 flex gap-1 overflow-x-auto border-b">
 	{#each TABS as t}
@@ -683,7 +728,11 @@
 					{#if isOnlineMeeting(form.location_type)}
 						{@const platform = form.location_type === 'teams' ? 'Microsoft Teams' : 'Google Meet'}
 						<Label for="et-loc-val">{platform} link</Label>
-						{#if meetAutoGen}
+						{#if editingForOwner}
+							<p class="rounded-md border px-3 py-2 text-sm text-muted-foreground">
+								A {platform} link is generated for each booking if {ownerLabel}'s connected calendar can create one. Otherwise paste a link below; saving checks this against their account.
+							</p>
+						{:else if meetAutoGen}
 							<p class="rounded-md border border-green-600/20 bg-green-50 px-3 py-2 text-sm text-green-700">
 								A {platform} link is generated automatically for each booking from your connected calendar.{#if form.location_type === 'teams'} Personal Microsoft accounts can't generate Teams links — add one below as a fallback.{/if}
 							</p>
@@ -698,7 +747,11 @@
 						<Input id="et-loc-val" bind:value={form.location_value} placeholder={meetAutoGen ? 'Optional fallback link' : `Paste a ${platform} link`} />
 					{:else if form.location_type === 'zoom'}
 						<Label for="et-loc-val">Zoom link</Label>
-						{#if zoomAutoGen}
+						{#if editingForOwner}
+							<p class="rounded-md border px-3 py-2 text-sm text-muted-foreground">
+								A Zoom meeting is created for each booking if the host has connected Zoom. Without a link below, saving checks that {ownerLabel} has.
+							</p>
+						{:else if zoomAutoGen}
 							<p class="rounded-md border border-green-600/20 bg-green-50 px-3 py-2 text-sm text-green-700">
 								A Zoom meeting is created automatically for each booking under the assigned host's connected Zoom account.
 							</p>
@@ -730,32 +783,47 @@
 			<div class="grid grid-cols-2 gap-4">
 				<div class="space-y-1.5">
 					<Label for="et-invite">Sent by</Label>
-					<Select.Root type="single" bind:value={form.invite_delivery}>
-						<Select.Trigger id="et-invite" class="w-full">
-							{INVITE_DELIVERY.find((o) => o.value === form.invite_delivery)?.label ?? 'Select…'}
-						</Select.Trigger>
-						<Select.Content>
-							{#each INVITE_DELIVERY as o}
-								<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
+					{#key inviteSelectReset}
+						<Select.Root type="single" value={form.invite_delivery} onValueChange={requestInviteDelivery}>
+							<Select.Trigger id="et-invite" class="w-full">
+								{INVITE_DELIVERY.find((o) => o.value === form.invite_delivery)?.label ?? 'Select…'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each INVITE_DELIVERY as o}
+									<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					{/key}
 				</div>
 				<p class="self-end text-xs text-muted-foreground">
 					{#if form.invite_delivery === 'calnode'}
 						Invitees get the invite from your workspace's email sender
 						(<a href="{base}/settings/email" class="underline">Settings → Email</a>), never from a host's
 						own address. Hosts still see the meeting on their own calendar, with the meeting link.
+					{:else if form.invite_delivery === 'none'}
+						Neither the host's calendar nor Calnode sends the booker an invite, for when your own
+						system does. Hosts still see the meeting on their own calendar, with the meeting link.
 					{:else}
 						The host's connected calendar invites the booker, so the invite shows the host's own
 						email address. Choose Calnode to keep hosts' addresses private or to book as a team.
 					{/if}
 				</p>
 			</div>
+			<p class="mt-2 text-xs text-muted-foreground">
+				Applies to new bookings only. Existing bookings keep the method they were sent with.
+			</p>
 			{#if form.invite_delivery === 'calnode' && et?.invite_sender_ready === false}
 				<p class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
 					Email isn't set up, so bookers won't receive an invite. Add a sender in
 					<a href="{base}/settings/email" class="underline">Settings → Email</a>.
+				</p>
+			{/if}
+			{#if form.invite_delivery === 'none' && isOnlineLocation(form.location_type)}
+				<p class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+					This event type books an online meeting, so every booking has a join link, and Calnode will
+					not send it to the booker. Pass its <code class="font-mono">location_value</code> from the
+					<code class="font-mono">booking.created</code> webhook in your own confirmation.
 				</p>
 			{/if}
 		</div>
@@ -828,7 +896,7 @@
 				<div class="inline-flex rounded-lg border bg-muted/40 p-0.5">
 					<button type="button" onclick={() => setScope('me')}
 						class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {hostScope === 'me' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}">
-						Just me
+						{editingForOwner ? `Just ${ownerLabel}` : 'Just me'}
 					</button>
 					<button type="button" onclick={() => setScope('people')}
 						class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {hostScope === 'people' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}">
@@ -837,7 +905,7 @@
 				</div>
 				<p class="text-xs text-muted-foreground">
 					{#if hostScope === 'me'}
-						Every booking goes to you.
+						{editingForOwner ? `Every booking goes to ${ownerLabel}.` : 'Every booking goes to you.'}
 					{:else}
 						Pick who can take these bookings — add members individually or pull in a whole team.
 					{/if}
@@ -1135,7 +1203,7 @@
 </div>
 {/if}
 
-{#if activeTab === 'hosts' && $currentUser?.is_admin}
+{#if activeTab === 'hosts' && $currentUser?.is_admin && et?.owned !== false}
 	<div class="mt-6 space-y-3 border-t pt-5">
 		<Label for="transfer-owner">Transfer ownership</Label>
 		<p class="text-sm text-muted-foreground">Choose a saved required host. The booking URL stays the same. Transfer is available only when there are no upcoming bookings. Calendar connections and global availability stay with each account.</p>
@@ -1162,5 +1230,14 @@
 		</Button>
 	</div>
 {/if}
+
+	<ConfirmDialog
+		bind:open={confirmNoneOpen}
+		title="Send the booker no invite at all?"
+		description="Email is not set up in this workspace, so Calnode will not email the booker anything for this event type, and the host's calendar will not invite them either. The booker only hears from you if your own system sends the confirmation."
+		confirmText="Use my own system"
+		cancelText="Cancel"
+		onConfirm={() => { form.invite_delivery = 'none'; noneAcknowledged = true; }}
+	/>
 
 {/if}

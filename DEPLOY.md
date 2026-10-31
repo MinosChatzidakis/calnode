@@ -14,8 +14,40 @@ small Alpine runtime) and published to GHCR:
 
 Or build it yourself with `docker build -t calnode .`.
 
-This guide covers a generic Docker deploy and a step-by-step **Railway** deploy
+This guide covers a standalone binary, a generic Docker deploy and a step-by-step **Railway** deploy
 (the current reference host).
+
+## Standalone binary
+
+Download `calnode_<version>_linux_amd64.tar.gz` (x86-64) or
+`calnode_<version>_linux_arm64.tar.gz` (ARM64), plus `checksums.txt`, from the same
+[GitHub release](https://github.com/Calnode/calnode/releases). Each archive contains
+the same static executable as the corresponding container image, with the admin
+UI and timezone database embedded, and the Apache-2.0 license. No Go, Node or Docker
+installation is needed to run it.
+
+For example, after downloading the amd64 archive and checksums for your chosen release:
+
+```bash
+version=X.Y.Z # replace with the downloaded release version, without the v prefix
+sha256sum --check --ignore-missing checksums.txt
+tar -xzf "calnode_${version}_linux_amd64.tar.gz"
+mkdir -p data
+export CALNODE_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+export CALNODE_RECOVERY_SECRET="$(openssl rand -hex 32)"
+BASE_URL=http://localhost:3000 DATABASE_URL=sqlite://./data/calnode.db ./calnode
+```
+
+Save both generated secrets before restarting; reuse them on subsequent starts and
+keep the recovery secret separately. For production, set `BASE_URL` to your HTTPS
+address, use a persistent data directory, and place the process behind a
+TLS-terminating proxy that preserves `Host`. The Linux host needs a CA certificate
+store for outbound HTTPS. Run the process under a service manager for automatic restarts.
+
+The archive does **not** include Litestream or the container entrypoint. Setting
+`LITESTREAM_REPLICA_URL` alone will not start backups or restore a database when running
+the binary directly; configure Litestream separately or use another SQLite-aware
+backup method. The email, calendar and other integration settings below still apply.
 
 ---
 
@@ -275,6 +307,22 @@ Recovery is automatic: if the volume comes up empty, `entrypoint.sh` restores th
 latest replica from object storage before starting the app. To **prove the
 round-trip without touching the live DB**, restore to a scratch path (never
 `/data/calnode.db`) and confirm it's a valid SQLite file.
+
+> **The replica holds the database, not the encryption key.** If you deployed
+> without setting `CALNODE_ENCRYPTION_KEY`, the app generated a key at first start
+> and wrote it to `calnode.key` next to the database (`/data/calnode.key` in the
+> container). Litestream does not replicate that file, so restoring the database
+> from the replica on its own will not start: the restored rows are sealed under a
+> key that is gone, and the app exits rather than re-keying your data. Back that
+> file up separately, and restore it beside the database.
+>
+> If a restore does fail this way, delete the `calnode.key` that the failed start
+> generated before restoring the real one — the process writes a new key on first
+> start, and that file will not unlock the restored database.
+>
+> Deployments that set `CALNODE_ENCRYPTION_KEY` in the environment (the recommended
+> production path, and what the NS8 module does) are unaffected: the key comes from
+> the environment, survives a volume loss with it, and no key file is written.
 
 **Non-destructive drill, in the container (zero setup — litestream + creds + config are already there):**
 ```bash

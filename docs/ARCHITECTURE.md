@@ -192,8 +192,8 @@ the platform/recovery secret doesn't expose secrets.
   requests are untouched. API-key auth isn't CSRF-able (custom header).
 - **Roles:** Member / Admin / Owner. `is_owner` is additive over `is_admin`.
   Owner-gated actions: grant/revoke admin, transfer ownership. Admins can cancel
-  any booking, see all bookings, manage teams/members. Safe-removal + archive
-  guards prevent orphaning.
+  any booking, see all bookings, manage teams/members, and edit, duplicate or delete
+  any event type (§14). Safe-removal + archive guards prevent orphaning.
 - **Sign out everywhere** (`POST /v1/auth/sessions/revoke-all`, `session.go`). With no
   body it drops all of the caller's sessions **except the one that made the request** —
   "sign out my other devices", as distinct from `POST /v1/auth/logout`, which ends the
@@ -564,10 +564,24 @@ instance sender from Settings → Email (`applyInviteDelivery`, `BookingData.Hid
 No sender address means no `ORGANIZER` line, never a fallback to the host. Host copies keep
 the host as organizer and, for a `calnode` booking, leave the booker out entirely and go out as
 `METHOD:PUBLISH` (`applyHostInvite`, `ICSWithoutAttendee`), so no host calendar holds them as
-a guest it could re-invite. Reschedule, cancel, reassign and the reconciler read the mode from
-the **booking**, not the event type, so a booking is always updated through the channel
-its invite went out on. Switching an event type to `calnode` requires email to be set up
-(validated on change).
+a guest it could re-invite. `none` (migration 00071) is for integrations that deliver the
+invite themselves: the hosts' events are written guestless exactly as for `calnode`
+(`hostEventsGuestless`) and host copies behave the same, but no Calnode email to the booker
+carries an `.ics`, whatever the host's calendar (`applyInviteDelivery`). The booker's emails
+themselves still go out when email is set up; whether Calnode emails at all stays with the
+mailer and the notification settings. Reschedule, cancel, reassign and the reconciler read
+the mode from the **booking**, not the event type, so a booking is always updated through
+the channel its invite went out on. Switching an event type to `calnode` requires email to
+be set up (validated on change); `none` does not. The booking JSON carries the mode as
+`invite_delivery`, and webhooks can select it as a payload field (not in the default set),
+so an integration can tell per booking whether the booker already holds an invite.
+
+00071 widened the 00068 `CHECK` without a table rebuild: SQLite cannot alter a `CHECK`, and
+rebuilding `bookings` would mean carrying its foreign-key children and the double-booking
+index through a `NO TRANSACTION` migration (compare 00042, which rebuilt only
+`event_types`). Because the `CHECK` belongs to the `invite_delivery` column alone, the
+migration adds a widened copy, fills it, drops the old column and renames the copy, inside
+goose's normal transaction. The column now sits last in both tables.
 
 **RSVPs to Calnode-sent invites (migration 00069, `rsvp_inbound.go`).** A booker's
 Yes/No/Maybe is an iTIP `REPLY` their mail client emails to the invite's `ORGANIZER`. Each
@@ -794,7 +808,8 @@ as the desired state:
 - **Per-webhook payload fields:** each webhook chooses which fields land in the `data`
   object (`webhooks.fields` JSON, migration 00027) — incl. attendee PII + intake
   answers. NULL ⇒ the original default set (so existing webhooks are unchanged and
-  never start leaking PII). The payload is enriched (`enrich`) + filtered per-webhook
+  never start leaking PII; fields added later that every booking carries, such as
+  `invite_delivery`, stay out of that set for the same reason). The payload is enriched (`enrich`) + filtered per-webhook
   (`buildData`) at enqueue time, so each subscriber gets its own `data`. New webhooks
   default to all fields ticked (self-hoster unticks what they don't want); a
   delivery-log view (status/HTTP/attempts) is in the admin webhooks page.
@@ -809,6 +824,35 @@ as the desired state:
 - Owners/admins can request the whole workspace: `GET /v1/bookings?scope=all`
   (gated on `IsAdmin`; ignored for non-admins so it can't escalate). The bookings
   page has a "My / All" toggle for admins with a Host column.
+- **Event types** follow the same model. A member lists what they own or host
+  (`GET /v1/event-types`); a host sees an event type read-only and only its owner may
+  change it. Admins (and so the instance owner) may manage **every** event type:
+  `GET /v1/event-types?scope=all` lists all of them (same `IsAdmin` gate, silently
+  ignored for members), and GET/PATCH/DELETE, `/hosts`, `/questions`, `/duplicate` and
+  `/test-email` accept any slug from an admin. One rule decides it,
+  `canManageEventType` (owner or admin), mostly resolved by `eventTypeForEditor`
+  (PATCH and test-email call it directly), which returns 404 rather than 403 so a
+  member cannot probe slugs. Slugs are unique per instance, so
+  the slug-addressed routes stay unambiguous.
+  The JSON carries `owned` (caller is the owner), `can_edit` (owner or admin; false =
+  read-only host) and `owner_id`; on GET and the list, `owner_name`/`owner_email`
+  whenever the caller is not the owner (PATCH and duplicate responses omit them). The admin UI gates read-only on `can_edit`, not `owned`.
+  ⛔ An admin edit never changes **whose** event type it is. Everything per-owner keeps
+  resolving to `event_types.user_id`: `validateLocation` checks the owner's calendar
+  and Zoom connections (the same rule as an owner's own edit), the editor's "Just me"
+  host is the owner, a duplicate belongs to the source's owner, and the test email
+  names the owner as host (it is still sent to the admin who asked).
+  Known limitation, unchanged by admin editing: Meet, Teams and Zoom links are minted
+  at booking time by the **primary host's** account (§10): the fixed event type's host or the assigned
+  round-robin/collective host, neither of whom has to be the owner (the host list
+  need not include them). A
+  location saved without a manual link can therefore validate against the owner and
+  still fall back to no link for a host who has no matching connection, and the test
+  email names the owner where a real booking names the primary host.
+  There is no audit table; admin changes to someone else's event type are logged as
+  `event type changed by admin` with action, owner and actor, next to the transfer log
+  line. Transfer itself (§7) is unchanged: it still moves only the caller's own event
+  type.
 
 ---
 
