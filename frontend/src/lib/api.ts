@@ -22,65 +22,65 @@ export type User = {
 };
 
 export type EventType = {
-	/** Lower first on public person/team pages; ties sort by name, then slug. */
-	display_order: number;
-	allow_phone_call: boolean;
-	id: string;
-	slug: string;
-	name: string;
-	description?: string;
-	duration_minutes: number;
-	// How often a booking can START, independent of how long it runs. Defaults to the
-	// duration on create; editable so a 45-minute meeting can still be offered on the hour.
-	slot_interval_minutes: number;
-	is_active: boolean;
-	is_public: boolean;
-	/** Show already-booked times struck through on the booking page instead of hiding
-	 *  them. Off by default: the slots endpoint is public, so this makes the host's
-	 *  booked hours visible to anyone with the link. */
-	show_taken_slots: boolean;
-	/** Who sends the booker's calendar invite. 'calendar': each host's connected calendar,
-	 *  from the host's own address. 'calnode': Calnode's own invite, from the email sender
-	 *  in Settings → Email, so no host's personal address reaches the booker. 'none': no
-	 *  invite from either; the hosts' events are guestless, for integrations that send their own. */
-	invite_delivery: 'calendar' | 'calnode' | 'none';
-	/** Whether Calnode can currently send invites (a sender and working email). Only
-	 *  returned on the single event type GET. */
-	invite_sender_ready?: boolean;
-	location_type: string;
-	location_value?: string;
-	buffer_before_minutes: number;
-	buffer_after_minutes: number;
-	min_notice_minutes: number;
-	max_future_days: number;
-	max_active_bookings: number;
-	price_cents: number; // 0 = free
-	currency: string;    // ISO 4217, lowercase (e.g. "usd")
-	created_at: string;
-	subj_confirmation?: string;
-	subj_cancellation?: string;
-	subj_reschedule?: string;
-	subj_reminder?: string;
-	msg_confirmation?: string;
-	msg_cancellation?: string;
-	msg_reschedule?: string;
-	msg_reminder?: string;
-	/** Overrides the conversational assistant's opening chat line; unset = built-in translated default. */
-	msg_greeting?: string;
-	reminders: number[]; // hours_before values
-	routing_mode: 'fixed' | 'round_robin' | 'collective';
-	rr_strategy: 'even' | 'soonest' | 'priority';
-	/** True when archived — hidden from the default list, is_active forced off. Reversible. */
-	archived?: boolean;
-	/** True if the current user owns this event type; false if they host it, or are an admin viewing someone else's. */
-	owned?: boolean;
-	/** True if the current user may edit it (the owner, or any admin); false = read-only host. */
-	can_edit?: boolean;
-	/** The user the event type belongs to; its availability and calendar/Zoom connections are theirs. */
-	owner_id?: string;
-	/** Owner identity, returned when the viewer is not the owner. */
-	owner_name?: string;
-	owner_email?: string;
+  /** Lower first on public person/team pages; ties sort by name, then slug. */
+  display_order: number;
+  allow_phone_call: boolean;
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  duration_minutes: number;
+  // How often a booking can START, independent of how long it runs. Defaults to the
+  // duration on create; editable so a 45-minute meeting can still be offered on the hour.
+  slot_interval_minutes: number;
+  is_active: boolean;
+  is_public: boolean;
+  /** Show already-booked times struck through on the booking page instead of hiding
+   *  them. Off by default: the slots endpoint is public, so this makes the host's
+   *  booked hours visible to anyone with the link. */
+  show_taken_slots: boolean;
+  /** Who sends the booker's calendar invite. 'calendar': each host's connected calendar,
+   *  from the host's own address. 'calnode': Calnode's own invite, from the email sender
+   *  in Settings → Email, so no host's personal address reaches the booker. 'none': no
+   *  invite from either; the hosts' events are guestless, for integrations that send their own. */
+  invite_delivery: "calendar" | "calnode" | "none";
+  /** Whether Calnode can currently send invites (a sender and working email). Only
+   *  returned on the single event type GET. */
+  invite_sender_ready?: boolean;
+  location_type: string;
+  location_value?: string;
+  buffer_before_minutes: number;
+  buffer_after_minutes: number;
+  min_notice_minutes: number;
+  max_future_days: number;
+  max_active_bookings: number;
+  price_cents: number; // 0 = free
+  currency: string; // ISO 4217, lowercase (e.g. "usd")
+  created_at: string;
+  subj_confirmation?: string;
+  subj_cancellation?: string;
+  subj_reschedule?: string;
+  subj_reminder?: string;
+  msg_confirmation?: string;
+  msg_cancellation?: string;
+  msg_reschedule?: string;
+  msg_reminder?: string;
+  /** Overrides the conversational assistant's opening chat line; unset = built-in translated default. */
+  msg_greeting?: string;
+  reminders: number[]; // hours_before values
+  routing_mode: "fixed" | "round_robin" | "collective";
+  rr_strategy: "even" | "soonest" | "priority";
+  /** True when archived — hidden from the default list, is_active forced off. Reversible. */
+  archived?: boolean;
+  /** True if the current user owns this event type; false if they host it, or are an admin viewing someone else's. */
+  owned?: boolean;
+  /** True if the current user may edit it (the owner, or any admin); false = read-only host. */
+  can_edit?: boolean;
+  /** The user the event type belongs to; its availability and calendar/Zoom connections are theirs. */
+  owner_id?: string;
+  /** Owner identity, returned when the viewer is not the owner. */
+  owner_name?: string;
+  owner_email?: string;
 };
 
 export type EventTypeHost = {
@@ -104,7 +104,6 @@ export type Question = {
 };
 
 export type Booking = {
-<<<<<<< HEAD
   id: string;
   event_type_slug: string;
   start_at: string;
@@ -120,25 +119,8 @@ export type Booking = {
   amount_paid_currency?: string;
   /** The booker's RSVP to a Calnode-sent invite; absent until an answer arrives. */
   rsvp_status?: "accepted" | "declined" | "tentative";
-=======
-	id: string;
-	event_type_slug: string;
-	start_at: string;
-	end_at: string;
-	status: 'confirmed' | 'cancelled';
-	attendees: { name: string; email: string }[];
-	created_at: string;
-	host_name?: string; // populated only in the admin "All bookings" view
-	location_value?: string;
-	/** Payment fields — present only for paid bookings (omitted when free). */
-	payment_status?: 'pending' | 'paid' | 'refunded';
-	amount_paid_cents?: number;
-	amount_paid_currency?: string;
-	/** The booker's RSVP to a Calnode-sent invite; absent until an answer arrives. */
-	rsvp_status?: 'accepted' | 'declined' | 'tentative';
-	/** Who sent the booker's calendar invite, fixed when the booking was made. */
-	invite_delivery?: 'calendar' | 'calnode' | 'none';
->>>>>>> c7b3e56778075d9ceda7fcbf3272f7dbe3bf33ae
+  /** Who sent the booker's calendar invite, fixed when the booking was made. */
+  invite_delivery?: "calendar" | "calnode" | "none";
 };
 
 export type APIKey = {
