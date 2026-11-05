@@ -27,10 +27,13 @@ docker run -p 3000:3000 -v ./data:/data ghcr.io/calnode/calnode:latest
 ```
 
 The whole app — booking pages, admin UI, SQLite — in one container, with data in
-`./data`. With no encryption key set it runs on an ephemeral one (fine for a look;
-stored credentials won't survive a restart). **Deploying for real** — HTTPS, a
-persistent encryption key, backups — see **[Deploy for real](#deploy-for-real)** below,
-or the full **[DEPLOY.md](DEPLOY.md)**.
+`./data`. The first start generates an encryption key and writes it to
+`./data/calnode.key`, so stored credentials survive a restart. **Back that file up
+with the database**: it is the only thing that can decrypt them, and Litestream
+replicates the database, not the key.
+
+**Deploying for real** — HTTPS, backups, and managing the key yourself — see
+**[Deploy for real](#deploy-for-real)** below, or the full **[DEPLOY.md](DEPLOY.md)**.
 
 ---
 
@@ -147,6 +150,12 @@ bookings they host. (The stdio subcommand is the local operator → full access.
 
 ## Deploy for real
 
+**Without Docker:** [GitHub releases](https://github.com/Calnode/calnode/releases)
+include standalone Linux amd64 and arm64 archives, each containing the static
+`calnode` binary and its license, alongside SHA-256 checksums. See
+[running the standalone binary](DEPLOY.md#standalone-binary) for setup and backup
+differences from the container.
+
 ```bash
 docker run -d -p 3000:3000 \
   -e BASE_URL=https://booking.example.com \
@@ -183,6 +192,7 @@ domains, Resend email, Google & Microsoft OAuth, Litestream backups, troubleshoo
 - **CalDAV calendars** — iCloud / Fastmail / Nextcloud via app-password (free/busy + event write-back)
 - Public booking + self-serve **reschedule/cancel** via signed manage links
 - HTML branded email (logo, banner, business name, size/opacity) with add-to-calendar links
+- Per-event-type **calendar invite sender**: the host's calendar, Calnode from your workspace address, or no one (your own system sends it)
 - REST API (88 endpoints) + API keys; **HMAC webhooks** with per-webhook payloads + delivery log
 - **Native MCP server** (10 tools incl. meeting notes + transcript; stdio via `calnode mcp` + Streamable HTTP at `/mcp`)
 - **Conversational booking** ("Book by chat" on the booking page + embed widget; BYO-LLM, off by default)

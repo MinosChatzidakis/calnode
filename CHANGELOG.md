@@ -11,6 +11,192 @@ exact tag (`ghcr.io/calnode/calnode:0.1.0`) if you need stability between upgrad
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-30
+
+### Fixed
+- **Microsoft calendars stop treating free and cancelled entries as busy.** Outlook's calendar
+  view lists entries that leave the owner available: reminders, all-day holidays from
+  subscribed calendars, cancelled meetings still on the calendar, and invitations that were
+  declined. Calnode counted all of them, so a single all-day "free" entry could block a
+  collective's whole day. None of those block now; tentative, busy, out-of-office and
+  working-elsewhere still do, which matches Outlook's own scheduling assistant.
+- **The notetaker enqueues jobs again.** Migration 00065 replaced the jobs table's full unique
+  index with a partial one over live jobs, and SQLite only accepts a partial index as an
+  upsert target when the `ON CONFLICT` clause repeats its predicate. The bare target matched
+  no constraint, so every transcribe and summarize enqueue failed. A pending duplicate is
+  still pulled forward to run now, a running job is left alone rather than run twice, and a
+  finished one starts a fresh run.
+- **Slots align to the host's wall clock, not the UTC epoch.** In a timezone offset by half an
+  hour or 45 minutes, hourly slots started at :30 or :45 local, so a 09:00-17:00 day never
+  offered 09:00; intervals that do not divide a day also drifted from day to day. Alignment
+  now counts from local midnight on the lead host's clock, on one shared clock because
+  collective and round-robin routing joins hosts on identical instants, and wall-clock
+  arithmetic keeps the grid stable across DST changes.
+- **A slow mail server no longer drops other hosts' calendar events or the webhook.**
+  Post-booking work shared a single 30-second deadline, so a stalled SMTP server could spend
+  it before the remaining hosts were handled. Reminders are queued first because they are
+  durable and need no calendar, the calendar phase has its own budget, the webhook is
+  enqueued after it on an uncancelled context so it still carries the minted link, and email
+  runs under a separate budget.
+- **Booking checks host calendars concurrently.** Hosts were read in sequence, so the budget
+  covered one provider round trip per host and a multi-host event could fail with a calendar
+  availability error. Checks now run concurrently and remain all-or-nothing, because a
+  partial union would read an unchecked provider's meetings as free time.
+- **Reassigning a booking moves the primary seat atomically.** The new host could end up with
+  two seats on the same booking. The seat now moves in the same transaction as `host_id`, a
+  legacy booking without a seat gets one, and reassigning onto an existing co-host returns
+  409 instead of creating a duplicate.
+- **Mail sent over SMTP carries `Date` and `Message-ID`.** Messages went out with only
+  `From`, `To` and `Subject`. RFC 5322 requires an origination date on every message and
+  expects a message identifier; some relays add what is missing, but not all do, and
+  receiving servers and spam filters score mail without them as suspicious — so
+  confirmations and reminders could land in spam. The identifier's domain comes from the
+  configured sender address, falling back to the SMTP host when that address is unset or
+  unusable. The Resend transport was unaffected; it sets both headers itself.
+- **A plain `docker run` no longer loses stored credentials on restart.** The documented
+  first install starts Calnode with no `CALNODE_ENCRYPTION_KEY`. With `BASE_URL` on
+  `http://`, the vault treated that as development mode and generated an ephemeral data key,
+  so every credential stored in the database — the SMTP password, Stripe keys, Zoom and
+  LiveKit secrets, OAuth client secrets — became unreadable at the next restart, while the
+  volume made the data look persisted. The only signal was the `BASE_URL` scheme, so a
+  production deployment behind a TLS-terminating proxy (`BASE_URL http`, TLS at the edge)
+  took the same silent path. A secret is now resolved before the vault opens: an explicit
+  `CALNODE_ENCRYPTION_KEY` still wins and writes nothing, an existing key file beside the
+  database is reused, and only a genuinely fresh install generates one, written `0600` with
+  `O_EXCL` so two starts cannot overwrite each other. An empty key file is now an error
+  rather than a cue to generate a replacement.
+- **A restore that is missing the encryption key now fails instead of starting fresh over an
+  encrypted database.** If the database already holds a wrapped data key but no key file is
+  present, Calnode generates one and then refuses to start, because it cannot unwrap the
+  existing data key — it never re-keys the data. The generated file is useless: replace it
+  with the real key, or set `CALNODE_ENCRYPTION_KEY`, before retrying the restore.
+- **An NS8 module release can no longer mix architectures.** The module build pushes each
+  architecture to a fixed staging tag (`:build-amd64`, `:build-arm64`) and then assembles the
+  multi-arch index from them. The workflow's concurrency group included the git ref, so a
+  push to `main` and a release tag — which are cut seconds apart — ran concurrently and
+  overwrote each other's staging images, publishing a manifest whose amd64 and arm64 came
+  from different releases. This is exactly what happened while cutting 0.11.2: `:edge`
+  carried amd64 from the tag (app `0.11.2`) and arm64 from `main` (app `edge`). The release
+  tags themselves were coherent; `:edge` was rebuilt. All module publishes now share one
+  concurrency group and serialise, with `cancel-in-progress` off so a release build cannot be
+  cancelled by an unrelated push. The post-publish architecture assertion is what caught it
+  and remains in place.
+
+### Changed
+- **The encryption key is persisted beside the database, and must be backed up with it.**
+  When Calnode generates the platform secret itself it writes `calnode.key` next to the
+  database (`/data/calnode.key` in the container). Litestream replicates the database, not
+  that file, so the two must be kept together: restoring the database alone will not start.
+  Deployments that set `CALNODE_ENCRYPTION_KEY` in the environment are unchanged and write
+  no key file.
+
+### Added
+- **Admins can manage every event type, not just their own.** Until now only an event
+  type's owner could edit or delete it; admins and the instance owner got the same
+  read-only view as an assigned host. A shared round-robin event type owned by a shared
+  account could only be changed by signing in as that account. Admins now get an
+  *All event types* view (`GET /v1/event-types?scope=all`, ignored for members, like
+  bookings' `scope=all`) with an Owner column, and can edit, duplicate and delete any
+  event type, including its hosts and questions. The event type stays its owner's: the
+  owner does not change, a copy belongs to the same owner, and a Zoom/Teams/Meet location
+  without a link is still checked against the owner's connected accounts, not the
+  admin's. Members and hosts see exactly what they did before. Event types in API
+  responses gain `can_edit` and `owner_id`; `owned` keeps its meaning (the caller is the
+  owner). Changes an admin makes to someone else's event type are logged.
+- **The published arm64 image is now exercised on native hardware on every PR and every
+  publish.** A new `arm64-smoke` job runs on an ARM runner, asserts the image and the
+  container really are `aarch64`, checks the app serves over HTTP, and — the part that
+  matters for this release — verifies the key file is persisted and that a restart unwraps
+  the existing data key rather than generating a new one. On a publish it pulls the exact
+  digest the build job produced, so it cannot pass against a stale tag.
+- **Calendar invites can be left to your own system.** *Calendar invite → Sent by* gains a
+  third choice, *Your own system*. Hosts still get the meeting, with its Meet/Teams link, on their
+  own calendar, but the booker is not a guest there, so their calendar provider sends no
+  invite, and Calnode attaches none to its emails. For setups that send their own
+  confirmation and invite. It needs no email setup; if email is set up, the booker's
+  confirmation, reschedule and cancellation emails still go out, without an invite.
+  Existing bookings keep the way they were invited.
+- **Bookings say how their invite was sent.** The booking JSON (`GET /v1/bookings`,
+  `GET /v1/bookings/{id}` and the MCP tools) now includes `invite_delivery` (`calendar`,
+  `calnode` or `none`), and webhooks can add it as a payload field. It is not in the
+  default field set, so existing webhooks are unchanged.
+
+### Upgrade notes
+- **Back up before upgrading.** This release adds migration `00071`, which rebuilds the
+  `invite_delivery` column on `bookings` and `event_types` because SQLite cannot alter a
+  `CHECK` constraint in place. It is a table rewrite: milliseconds at ordinary data sizes
+  (18ms against a small production database), but take a restore point first. The down
+  migration maps `none` to `calnode`, so lowering the version after using the new mode is
+  lossy for that value.
+
+## [0.11.2] - 2026-10-28
+
+### Added
+- **Calnode now ships as a standalone Linux binary, not only a container image.** Every
+  tagged release also publishes `calnode_<version>_linux_amd64.tar.gz` and
+  `calnode_<version>_linux_arm64.tar.gz`, with `checksums.txt` and the licence, on the same
+  GitHub release as the images. Each archive is the exact executable that is inside the
+  corresponding image: statically linked, with the admin UI and the IANA timezone database
+  compiled in, so it needs no Go, Node or Docker on the host. It is the same build, so the
+  binary and the image cannot drift apart. Two things to know before using it: the archive
+  does **not** include Litestream, so setting `LITESTREAM_REPLICA_URL` alone starts neither
+  backups nor restore — arrange backups separately or use the container — and the host needs
+  a CA certificate store for outbound HTTPS.
+
+### Fixed
+- **Reminder emails show the workspace logo and banner again** (#168). Confirmations,
+  cancellations and reschedules had always displayed them, but reminders did not: the worker
+  built the email from `server_settings` directly and skipped the relative-to-absolute step
+  the handler performs, leaving `<img src="/branding/logo?v=…">`. Mail clients cannot resolve
+  a relative path, so the logo disappeared and the banner never loaded at all. The cause was
+  structural — the branding helpers were methods on the HTTP handler, which a separate
+  package cannot call — so the brand identity now lives in `internal/branding` and both
+  senders use it.
+- **The booking page no longer pushes host avatars into the calendar** (#169). With several
+  hosts the info panel drew every face, and six hosts overflowed the 240px panel border into
+  the calendar column. At most three faces are drawn now, matching the "Wynne, Bob, Cara &
+  3 others" wording that already named only three, with a `+N` chip for the rest. Applied to
+  both surfaces that draw faces, the booking page and the embed widget.
+- **ChatGPT and other MCP clients that require protocol `2026-07-28` can discover the
+  server** (#171). `/mcp` answered `server/discover` with supported versions ending at
+  `2025-11-25`; a client that asks for the newer version and does not fall back stopped at
+  action discovery. The cause was transport mode rather than the SDK, which already knew the
+  version but only offers it on a stateless transport. Calnode holds no MCP session state —
+  every request is authenticated independently — so the transport is now stateless. Clients
+  that negotiate down were never affected.
+
+### Changed
+- **Container images build roughly five times faster, with no emulation** (#165). The
+  multi-arch build compiled both the frontend and the Go binary under QEMU for arm64, which
+  took 11-13 minutes and occasionally hung until the job's six-hour timeout. Neither stage
+  needed emulation: the frontend output is architecture-independent and CGO is disabled, so
+  both now build on the build platform and Go cross-compiles to the target. A release build
+  fell from about 700-800s to about 160s, and the job now has a 60-minute ceiling so a hang
+  fails visibly instead of holding for six hours.
+- **Security scanning runs on pull requests, not only after merge** (#164). `govulncheck`,
+  `gosec` and `gitleaks` ran only on push to `main`, weekly, and manually, so the Go standard
+  library advisory that broke the clean-scan claim was already on `main` before anything
+  reported it. They now run on every pull request. The OpenSSF Scorecard job is gated to
+  `main`, since it refuses any other ref and was producing a red result that meant nothing.
+- **Merged pull requests are no longer locked** (#161). The CLA action's default locks every
+  merged PR, which silently blocks any later comment or bot action and made a healthy review
+  run look broken. The signature record is the committed `cla.json` ledger, which the action
+  only ever appends to, so the lock was protecting a duplicate; a new CI check now fails any
+  pull request that removes an already-signed contributor.
+- **The Go toolchain is 1.26.10** (#163), closing GO-2026-6809 in `crypto/x509`. The
+  vulnerability was reachable through the SMTP transport's TLS dial.
+
+### Fixed (NS8)
+- **A cloned NS8 instance releases the source's hostname** (#157). The core clone copies the
+  volumes and `state/`, which meant a clone arrived holding the original hostname but with no
+  route of its own — the route belongs to the source instance — and configuring it with that
+  hostname was refused because the source still answered for it. The clone now comes up
+  unconfigured, exactly like a freshly added instance, and keeps its encryption key: dropping
+  that would have left it with a database it cannot decrypt.
+- **The NS8 install guidance no longer claims `:latest` is amd64-only** (#156). Since 0.11.1
+  it is a genuine multi-arch index, so pinning a version is recommended for reproducibility
+  rather than because `:latest` fails on a Pi.
+
 ## [0.11.1] - 2026-10-16
 
 ### Fixed
