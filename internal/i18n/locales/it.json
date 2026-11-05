@@ -168,5 +168,6 @@
   "directory_empty": "Niente da prenotare al momento.",
   "directory_members": "Membri del team",
   "directory_person_subtitle": "Prenota del tempo con %s",
-  "directory_team_subtitle": "Prenota del tempo con il team %s"
+  "directory_team_subtitle": "Prenota del tempo con il team %s",
+  "start_new_search": "Avvia una nuova ricerca"
 }
